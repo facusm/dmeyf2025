@@ -32,7 +32,9 @@ def main():
     #00 Cargar datos
     os.makedirs("datos", exist_ok=True)
     path = "datos/competencia_01.csv"
-    df = cargar_datos(path)   
+    df = cargar_datos(path)
+
+    df.drop(columns=["mprestamos_personales", "cprestamos_personales"], inplace=True)   
 
     #01 Feature Engineering
     atributos = [
@@ -48,7 +50,6 @@ def main():
     "mtarjeta_visa_consumo",
     "ctarjeta_master_transacciones",
     "mtarjeta_master_consumo",
-    "mprestamos_personales",
     "mprestamos_prendarios",
     "mprestamos_hipotecarios",
     "mplazo_fijo_dolares",
@@ -83,7 +84,6 @@ def main():
     ("Visa_mconsumototal", "Visa_mlimitecompra"),
     ("mtarjeta_master_consumo", "Master_mlimitecompra"),
     ("mtarjeta_visa_consumo", "Visa_mlimitecompra"),
-    ("mprestamos_personales", "mcuentas_saldo"),
     ("mprestamos_prendarios", "mcuentas_saldo"),
     ("mprestamos_hipotecarios", "mcuentas_saldo"),
     ("mcaja_ahorro", "mcuentas_saldo"),
