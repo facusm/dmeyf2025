@@ -13,7 +13,10 @@ for path in [DATASET_PATH, MODELOS_PATH, DB_PATH, SUBMISSIONS_PATH]:
     os.makedirs(path, exist_ok=True)
 
 # === CONFIGURACIÓN DE NOMBRES === #
-SUFIJO_FE = "FE_v1"
+VERSION = "v2"
+BUCKET_NAME = "b1"
+FILE_BASE = "competencia_02"
+SUFIJO_FE = f"FE_{VERSION}"
 
 NOMBRE_BASE_DE_DATOS_OPTUNA = f"optimization_lgbm_{SUFIJO_FE}.db"
 NOMBRE_DE_ESTUDIO_OPTUNA = f"lgbm_cv_{SUFIJO_FE}"

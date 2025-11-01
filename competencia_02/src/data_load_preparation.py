@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 from config.config import (
-    DATASET_PATH, ARCHIVO_DATOS_CSV, MESES_TRAIN, MES_VALID, MES_TEST_FINAL,
+    MESES_TRAIN, MES_VALID, MES_TEST_FINAL,
     COLS_ID, ELIMINAR_COLUMNAS_ID, APLICAR_UNDERSAMPLING, RATIO_UNDERSAMPLING
 )
 from src.utils import logger, aplicar_undersampling
@@ -18,7 +18,7 @@ def cargar_datos(path: str) -> pd.DataFrame | None:
 
     logger.info(f"Cargando dataset desde {path}")
     try:
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, compression="gzip")
         logger.info(f"Dataset cargado con {df.shape[0]} filas y {df.shape[1]} columnas")
         return df
     except Exception as e:

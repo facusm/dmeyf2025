@@ -4,11 +4,13 @@ from datetime import datetime
 
 # === IMPORTS INTERNOS === #
 from config.config import (
-    DATASET_PROCESADO_PATH,
     PARAMS,
     SEMILLAS,
     SUFIJO_FE,
-    MES_TEST_FINAL
+    MES_TEST_FINAL,
+    BUCKET_NAME,
+    FILE_BASE,
+    VERSION
 )
 from src.data_load_preparation import (
     cargar_datos,
@@ -52,7 +54,7 @@ def main():
 
     # --- 1️⃣ CARGA Y PREPARACIÓN DE DATOS --- #
     logger.info("📥 Cargando dataset procesado...")
-    data = cargar_datos(DATASET_PROCESADO_PATH)
+    data = cargar_datos(f"gs://{BUCKET_NAME}/{FILE_BASE}_FE_{VERSION}.csv.gz")
     data = preparar_clases_y_pesos(data)
 
     # --- 2️⃣ DIVISIÓN EN TRAIN/VALID/TEST --- #
