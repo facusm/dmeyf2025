@@ -2,14 +2,21 @@
 import os
 
 # === CONFIGURACIÓN DE PATHS === #
-BASE_PATH = os.getcwd()
-DATASET_PATH = os.path.join(BASE_PATH, 'datos')
-MODELOS_PATH = os.path.join(BASE_PATH, 'modelos')
-DB_PATH = os.path.join(BASE_PATH, 'db')
-SUBMISSIONS_PATH = os.path.join(BASE_PATH, 'submissions')
 
-# Crear directorios si no existen
-for path in [DATASET_PATH, MODELOS_PATH, DB_PATH, SUBMISSIONS_PATH]:
+# Ruta al bucket montado localmente 
+BUCKET_PATH_b1 = "/home/sanmartinofacundo/buckets/b1/"
+
+# Rutas derivadas dentro del bucket
+DB_PATH = os.path.join(BUCKET_PATH_b1, "db")
+MODELOS_PATH = os.path.join(BUCKET_PATH_b1, "modelos")
+LOGS_PATH = os.path.join(BUCKET_PATH_b1, "logs")
+RESULTADOS_PREDICCION_PATH = os.path.join(BUCKET_PATH_b1, "resultados_prediccion")
+
+# Dataset crudo local
+DATASET_CRUDO_PATH = "/home/sanmartinofacundo/datasets/competencia_02_crudo.csv.gz"
+
+# Crear directorios dentro del bucket si no existen
+for path in [DB_PATH, MODELOS_PATH, LOGS_PATH, RESULTADOS_PREDICCION_PATH]:
     os.makedirs(path, exist_ok=True)
 
 # === CONFIGURACIÓN DE NOMBRES === #
@@ -18,14 +25,13 @@ BUCKET_NAME = "b1"
 FILE_BASE = "competencia_02"
 SUFIJO_FE = f"FE_{VERSION}"
 
+# Archivos y nombres derivados
 NOMBRE_BASE_DE_DATOS_OPTUNA = f"optimization_lgbm_{SUFIJO_FE}.db"
 NOMBRE_DE_ESTUDIO_OPTUNA = f"lgbm_cv_{SUFIJO_FE}"
-ARCHIVO_DATOS_CSV = f"competencia_02_{SUFIJO_FE}.csv"
+ARCHIVO_DATOS_CSV = f"{FILE_BASE}_{SUFIJO_FE}.csv"
 NOMBRE_NOTEBOOK = f"CV_clasico_semillas_{SUFIJO_FE}"
 NOMBRE_EXPERIMENTO = f"lgbm_cv_{SUFIJO_FE}"
 
-# === CONFIGURACIÓN DE DATASETS === #
-DATASET_PROCESADO_PATH = os.path.join(DATASET_PATH, ARCHIVO_DATOS_CSV)
 
 # === CONFIGURACIÓN DE UNDERSAMPLING === #
 APLICAR_UNDERSAMPLING = True  # Activar/desactivar undersampling
@@ -50,7 +56,7 @@ PARAMS = {
     "n_folds": 5,
     "num_boost_round": 2000,
     "early_stopping_rounds": 50,
-    "target": "clase_binaria2",  # o "clase_binaria1"
+    "target": "clase_binaria2",  
 }
 
 # === CONFIGURACIÓN DE COLUMNAS === #

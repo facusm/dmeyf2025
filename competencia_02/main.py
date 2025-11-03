@@ -8,9 +8,10 @@ from config.config import (
     SEMILLAS,
     SUFIJO_FE,
     MES_TEST_FINAL,
-    BUCKET_NAME,
+    BUCKET_PATH_b1,   
     FILE_BASE,
-    VERSION
+    VERSION,
+    LOGS_PATH        
 )
 from src.data_load_preparation import (
     cargar_datos,
@@ -31,18 +32,28 @@ from src.utils import logger
 
 # === CONFIGURACIÓN DE LOGGING GLOBAL === #
 def setup_logger():
-    """Configura el logger para guardar logs en carpeta /logs"""
-    logs_dir = "logs"
-    os.makedirs(logs_dir, exist_ok=True)
+    """Configura el logger para guardar logs dentro del bucket (b1/logs/)"""
+    os.makedirs(LOGS_PATH, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(logs_dir, f"main_{timestamp}.log")
+    log_path = os.path.join(LOGS_PATH, f"main_{timestamp}.log")
 
-    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
-    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logger.setLevel(logging.INFO)
 
-    logger.addHandler(file_handler)
+    # Evitar duplicados si se ejecuta varias veces
+    if not logger.handlers:
+        # Consola
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        logger.addHandler(stream_handler)
+
+        # Archivo dentro del bucket
+        file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        logger.addHandler(file_handler)
+
     logger.info(f"📂 Logging iniciado. Archivo: {log_path}")
+    return logger  # ✅ devolvemos el logger configurado
 
 
 # === MAIN PIPELINE === #
@@ -54,18 +65,19 @@ def main():
 
     # --- 1️⃣ CARGA Y PREPARACIÓN DE DATOS --- #
     logger.info("📥 Cargando dataset procesado...")
-    data = cargar_datos(f"gs://{BUCKET_NAME}/{FILE_BASE}_FE_{VERSION}.csv.gz")
+    path_input = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.csv.gz")  # ✅ ruta montada local
+    data = cargar_datos(path_input)
     data = preparar_clases_y_pesos(data)
 
     # --- 2️⃣ DIVISIÓN EN TRAIN/VALID/TEST --- #
     logger.info("🧩 Preparando datasets...")
-    X_train_optuna, y_train_optuna, w_train_optuna = preparar_train_optuna(data) # Aplica undersampling con las configuraciones de config.py por defecto, se le puede pasar otros valores si se desea
+    X_train_optuna, y_train_optuna, w_train_optuna = preparar_train_optuna(data)
     X_valid, y_valid, w_valid = preparar_validacion(data)
     X_test, clientes_test = preparar_test_final(data)
     X_train_completo, y_train_completo, w_train_completo = preparar_train_completo(
         (X_train_optuna, y_train_optuna, w_train_optuna),
         X_valid, y_valid, w_valid
-    ) # Entrena con el train incial + validación. Se puede pasar con o sin undersampling. Ya tiene el undersampling aplicado si se usa el train_optuna
+    )
 
     # --- 3️⃣ OPTIMIZACIÓN DE HIPERPARÁMETROS CON OPTUNA --- #
     logger.info("\n🎯 Iniciando optimización bayesiana con Optuna...")
@@ -116,9 +128,8 @@ def main():
         semillas=SEMILLAS,
         N_enviados_final=eval_result['N_enviados'],
         nombre_modelo="ensemble_lgbm",
-        trial_number=study.best_trial.number,
-        output_dir="resultados_prediccion"
-    )
+        trial_number=study.best_trial.number
+    )  # ✅ se elimina output_dir
 
     logger.info(f"\n{'='*80}")
     logger.info("✅ PIPELINE COMPLETADO EXITOSAMENTE")

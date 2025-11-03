@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import logging
 from datetime import datetime
+from config.config import RESULTADOS_PREDICCION_PATH  # ✅ Importás la ruta global desde config
 
 
 def generar_reporte_ensemble(
@@ -18,25 +19,30 @@ def generar_reporte_ensemble(
     semillas,
     N_enviados_final,
     nombre_modelo="modelo",
-    trial_number=None,
-    output_dir="resultados_prediccion"
+    trial_number=None
 ):
     """
     Genera el archivo final del ensemble y un resumen detallado.
-    Guarda el CSV en resultados_prediccion/ y usa logger.info para reportar.
+    Guarda el CSV directamente dentro del bucket (b1/resultados_prediccion/)
+    y usa logger.info para reportar los resultados.
     """
 
     logger = logging.getLogger(__name__)
-    os.makedirs(output_dir, exist_ok=True)
+
+    # === Directorio de salida dentro del bucket (ya creado desde config) ===
+    output_dir = RESULTADOS_PREDICCION_PATH
 
     # === Generar CSV ===
     submission = pd.DataFrame({
-        'numero_de_cliente': test_data['numero_de_cliente'].values,
-        'Predicted': prediccion_final_binaria
+        "numero_de_cliente": test_data["numero_de_cliente"].values,
+        "Predicted": prediccion_final_binaria
     })
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    submission_filename = f"{nombre_modelo}_T{trial_number or 'final'}_U{umbral_junio:.6f}_N{N_enviados_final}_{timestamp}.csv"
+    submission_filename = (
+        f"{nombre_modelo}_T{trial_number or 'final'}_U{umbral_junio:.6f}_"
+        f"N{N_enviados_final}_{timestamp}.csv"
+    )
     submission_path = os.path.join(output_dir, submission_filename)
     submission.to_csv(submission_path, index=False)
 
@@ -48,7 +54,7 @@ def generar_reporte_ensemble(
     logger.info(f"🎯 Umbral usado para junio: {umbral_junio:.6f}")
     logger.info(f"📮 Número de envíos: {N_enviados_final:,}")
 
-    logger.info(f"\n💾 Archivo guardado: {submission_path}")
+    logger.info(f"\n💾 Archivo guardado en: {submission_path}")
     logger.info(f"📊 Distribución: {submission['Predicted'].value_counts().to_dict()}")
     logger.info(f"   - Clase 0 (no enviar): {(prediccion_final_binaria == 0).sum():,}")
     logger.info(f"   - Clase 1 (enviar):    {(prediccion_final_binaria == 1).sum():,}")
@@ -90,10 +96,10 @@ def generar_reporte_ensemble(
     logger.info(f"   - Q3:      {np.percentile(probabilidades_junio_ensemble, 75):.6f}")
 
     logger.info(f"\n📮 Predicción final:")
-    logger.info(f"   Clientes a contactar: {N_enviados_final:,} ({N_enviados_final/len(prediccion_final_binaria)*100:.2f}%)")
+    logger.info(f"   Clientes a contactar: {N_enviados_final:,} ({N_enviados_final / len(prediccion_final_binaria) * 100:.2f}%)")
     logger.info(f"   Clientes sin contactar: {(prediccion_final_binaria == 0).sum():,}")
 
-    logger.info(f"\n✅ Archivo generado en: {submission_path}")
+    logger.info(f"\n✅ Archivo generado correctamente en: {submission_path}")
     logger.info(f"{sep}")
 
     return submission_path
