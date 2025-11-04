@@ -34,8 +34,8 @@ NOMBRE_EXPERIMENTO = f"lgbm_cv_{SUFIJO_FE}"
 
 
 # === CONFIGURACIÓN DE UNDERSAMPLING === #
-APLICAR_UNDERSAMPLING = True  # Activar/desactivar undersampling
-RATIO_UNDERSAMPLING = 0.4  
+APLICAR_UNDERSAMPLING = False  # Activar/desactivar undersampling
+RATIO_UNDERSAMPLING = 1.0  
 
 # === CONFIGURACIÓN DE MESES Y SEMILLAS === #
 MESES_TRAIN = [202101, 202102, 202103]  # Entrenamiento Optuna con cv clásico
@@ -64,7 +64,7 @@ COLS_ID = ['foto_mes', 'numero_de_cliente']
 ELIMINAR_COLUMNAS_ID = False  # Cambiar a True si deseas eliminarlas
 
 # === CONFIGURACIÓN DE OPTUNA === #
-N_TRIALS = 5
-N_STARTUP_TRIALS = 2  # Trials aleatorios iniciales
+N_TRIALS = 80
+N_STARTUP_TRIALS = 20  # Trials aleatorios iniciales
 
 
