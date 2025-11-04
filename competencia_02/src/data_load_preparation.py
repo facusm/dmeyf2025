@@ -11,18 +11,29 @@ from src.utils import logger, aplicar_undersampling
 
 ## Funcion para cargar datos
 def cargar_datos(path: str) -> pd.DataFrame | None:
+    """
+    Carga un dataset desde el path dado, detectando automáticamente el formato
+    (.csv.gz o .parquet), y retorna un pandas.DataFrame.
+    """
+    logger.info(f"📥 Cargando dataset desde {path}")
 
-    '''
-    Carga un CSV desde 'path' y retorna un pandas.DataFrame.
-    '''
-
-    logger.info(f"Cargando dataset desde {path}")
     try:
-        df = pd.read_csv(path, compression="gzip")
-        logger.info(f"Dataset cargado con {df.shape[0]} filas y {df.shape[1]} columnas")
+        if path.endswith(".parquet"):
+            df = pd.read_parquet(path)
+        elif path.endswith(".csv.gz") or path.endswith(".csv"):
+            df = pd.read_csv(path, compression="gzip" if path.endswith(".gz") else None)
+        else:
+            raise ValueError("❌ Formato de archivo no soportado. Use .parquet o .csv(.gz)")
+
+        logger.info(f"✅ Dataset cargado con {df.shape[0]:,} filas y {df.shape[1]:,} columnas")
         return df
+
     except Exception as e:
-        logger.error(f"Error al cargar el dataset: {e}")
+        logger.error(f"⚠️ Error al cargar el dataset: {e}")
+        raise
+
+    except Exception as e:
+        logger.error(f"❌ Error al cargar el dataset: {e}")
         raise
 
 

@@ -110,8 +110,10 @@ def main():
 
     logger.info(f"✅ Feature engineering finalizado. Forma resultante: {df_fe.shape}")
 
-    # 03. GUARDAR DIRECTAMENTE EN EL BUCKET (optimizado con DuckDB)
-    logger.info("💾 Guardando dataset final directamente en el bucket (modo rápido con DuckDB)...")
+    # 03. GUARDAR DIRECTAMENTE EN EL BUCKET (modo Parquet optimizado con DuckDB)
+    logger.info("💾 Guardando dataset final en formato Parquet (rápido y eficiente)...")
+
+    path_output = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.parquet")
 
     con = duckdb.connect(database=':memory:')
     con.register("df_fe", df_fe)
@@ -119,11 +121,11 @@ def main():
     con.execute(f"""
         COPY df_fe 
         TO '{path_output}' 
-        (FORMAT CSV, HEADER, COMPRESSION GZIP);
+        (FORMAT PARQUET, COMPRESSION 'ZSTD');
     """)
 
     file_size_mb = os.path.getsize(path_output) / (1024 * 1024)
-    logger.info(f"✅ Archivo guardado eficientemente en el bucket: {path_output} ({file_size_mb:.2f} MB)")
+    logger.info(f"✅ Archivo guardado en formato Parquet: {path_output} ({file_size_mb:.2f} MB)")
 
     # 04. DURACIÓN TOTAL
     duracion_min = (time.time() - inicio) / 60

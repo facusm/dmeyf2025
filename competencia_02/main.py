@@ -65,7 +65,7 @@ def main():
 
     # --- 1️⃣ CARGA Y PREPARACIÓN DE DATOS --- #
     logger.info("📥 Cargando dataset procesado...")
-    path_input = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.csv.gz")  # ✅ ruta montada local
+    path_input = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.parquet") # ✅ formato Parquet (más eficiente)
     data = cargar_datos(path_input)
     data = preparar_clases_y_pesos(data)
 
