@@ -3,6 +3,7 @@ import os
 import datetime
 import logging
 import time
+import duckdb
 
 from src.data_load_preparation import cargar_datos
 from .features import (
@@ -109,10 +110,20 @@ def main():
 
     logger.info(f"✅ Feature engineering finalizado. Forma resultante: {df_fe.shape}")
 
-    # 03. GUARDAR DIRECTAMENTE EN EL BUCKET LOCAL
-    df_fe.to_csv(path_output, index=False, compression="gzip")
+    # 03. GUARDAR DIRECTAMENTE EN EL BUCKET (optimizado con DuckDB)
+    logger.info("💾 Guardando dataset final directamente en el bucket (modo rápido con DuckDB)...")
+
+    con = duckdb.connect(database=':memory:')
+    con.register("df_fe", df_fe)
+
+    con.execute(f"""
+        COPY df_fe 
+        TO '{path_output}' 
+        (FORMAT CSV, HEADER, COMPRESSION GZIP);
+    """)
+
     file_size_mb = os.path.getsize(path_output) / (1024 * 1024)
-    logger.info(f"💾 Archivo guardado en el bucket: {path_output} ({file_size_mb:.2f} MB)")
+    logger.info(f"✅ Archivo guardado eficientemente en el bucket: {path_output} ({file_size_mb:.2f} MB)")
 
     # 04. DURACIÓN TOTAL
     duracion_min = (time.time() - inicio) / 60
