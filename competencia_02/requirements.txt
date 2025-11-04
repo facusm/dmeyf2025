@@ -1,7 +1,10 @@
-duckdb
+duckdb-engine
+jupysql
+lightgbm
 pandas
-umap-learn
+optuna
 numpy
 matplotlib
 scikit-learn
 seaborn
+duckdb
