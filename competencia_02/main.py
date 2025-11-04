@@ -65,9 +65,13 @@ def main():
 
     # --- 1️⃣ CARGA Y PREPARACIÓN DE DATOS --- #
     logger.info("📥 Cargando dataset procesado...")
-    path_input = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.parquet") # ✅ formato Parquet (más eficiente)
+    path_input = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.parquet")  # ✅ formato Parquet (más eficiente)
     data = cargar_datos(path_input)
+
+    logger.info(f"✅ Dataset cargado correctamente. Shape: {data.shape[0]:,} filas × {data.shape[1]:,} columnas")
+
     data = preparar_clases_y_pesos(data)
+
 
     # --- 2️⃣ DIVISIÓN EN TRAIN/VALID/TEST --- #
     logger.info("🧩 Preparando datasets...")

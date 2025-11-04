@@ -1,6 +1,7 @@
 # src/data_preparation.py
 import pandas as pd
 import numpy as np
+import duckdb
 import os
 from config.config import (
     MESES_TRAIN, MES_VALID, MES_TEST_FINAL,
@@ -10,30 +11,31 @@ from src.utils import logger, aplicar_undersampling
 
 
 ## Funcion para cargar datos
-def cargar_datos(path: str) -> pd.DataFrame | None:
+def cargar_datos(path: str) -> pd.DataFrame:
     """
-    Carga un dataset desde el path dado, detectando automáticamente el formato
-    (.csv.gz o .parquet), y retorna un pandas.DataFrame.
+    Carga datasets en formato .parquet o .csv(.gz) de forma eficiente usando DuckDB.
+    Devuelve un DataFrame de pandas listo para usar.
     """
     logger.info(f"📥 Cargando dataset desde {path}")
 
     try:
+        con = duckdb.connect(database=':memory:')
+        # Detectar formato automáticamente
         if path.endswith(".parquet"):
-            df = pd.read_parquet(path)
+            query = f"SELECT * FROM read_parquet('{path}')"
         elif path.endswith(".csv.gz") or path.endswith(".csv"):
-            df = pd.read_csv(path, compression="gzip" if path.endswith(".gz") else None)
+            query = f"SELECT * FROM read_csv_auto('{path}', header=True)"
         else:
-            raise ValueError("❌ Formato de archivo no soportado. Use .parquet o .csv(.gz)")
+            raise ValueError("❌ Formato de archivo no soportado (solo .parquet o .csv(.gz))")
+
+        # Leer y convertir a pandas
+        df = con.execute(query).fetchdf()
 
         logger.info(f"✅ Dataset cargado con {df.shape[0]:,} filas y {df.shape[1]:,} columnas")
         return df
 
     except Exception as e:
         logger.error(f"⚠️ Error al cargar el dataset: {e}")
-        raise
-
-    except Exception as e:
-        logger.error(f"❌ Error al cargar el dataset: {e}")
         raise
 
 
