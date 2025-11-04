@@ -144,35 +144,29 @@ def objective(trial, X_train, y_train, w_train, seed):
 def ejecutar_optimizacion(X_train, y_train, w_train, seed, n_trials=None):
     """
     Ejecuta la optimización de hiperparámetros.
-    
-    Parameters
-    ----------
-    X_train : pd.DataFrame
-        Features de entrenamiento.
-    y_train : pd.Series
-        Target de entrenamiento.
-    w_train : pd.Series
-        Pesos de entrenamiento.
-    seed : int
-        Semilla para reproducibilidad.
-    n_trials : int, optional
-        Número de trials a ejecutar. Si no se provee, usa N_TRIALS de config.
-    
-    Returns
-    -------
-    optuna.Study
-        Estudio completado.
+    Si el estudio ya alcanzó el número de trials deseado, no vuelve a optimizar.
     """
     study = crear_estudio_optuna(seed, load_if_exists=True)
-    
     n_trials = n_trials or N_TRIALS
-    logger.info(f"🚀 Iniciando optimización con {n_trials} trials...")
-    
+
+    n_completados = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+    logger.info(f"📊 Trials completados hasta ahora: {n_completados}/{n_trials}")
+
+    # Si ya se alcanzó o superó el número de trials, no sigue
+    if n_completados >= n_trials:
+        logger.info("✅ Ya se alcanzó el número total de trials. No se realizará nueva optimización.")
+        logger.info(f"🏆 Mejor ganancia: {study.best_value:.2f}")
+        logger.info(f"🏅 Mejor conjunto de parámetros: {study.best_params}")
+        return study
+
+    # Si faltan trials, ejecuta solo los que faltan
+    n_restantes = n_trials - n_completados
+    logger.info(f"🚀 Ejecutando {n_restantes} trials adicionales...")
+
     study.optimize(
         lambda trial: objective(trial, X_train, y_train, w_train, seed),
-        n_trials=n_trials
+        n_trials=n_restantes
     )
-    
+
     logger.info(f"✅ Optimización completada. Mejor ganancia: {study.best_value:.2f}")
-    
     return study
