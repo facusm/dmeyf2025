@@ -31,7 +31,6 @@ def pisar_con_mes_anterior_duckdb(
     slim = df[[id_col, mes_col, variable]].copy()
 
     con = duckdb.connect()
-    con.execute("PRAGMA threads = system;")
     con.register("t_in", slim)
     con.register("meses_bad", pd.DataFrame({mes_col: meses_anomalos}))
 
