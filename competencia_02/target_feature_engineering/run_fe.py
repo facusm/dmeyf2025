@@ -103,7 +103,7 @@ def main():
     df = pisar_con_mes_anterior_duckdb(df, variable="ccheques_emitidos_rechazados", meses_anomalos=[202006])
     df = pisar_con_mes_anterior_duckdb(df, variable="mcheques_emitidos_rechazados", meses_anomalos=[202006])
     df = pisar_con_mes_anterior_duckdb(df, variable="tcallcenter", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="callcenter_transacciones", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccallcenter_transacciones", meses_anomalos=[202006])
     df = pisar_con_mes_anterior_duckdb(df, variable="thomebanking", meses_anomalos=[202006])
     df = pisar_con_mes_anterior_duckdb(df, variable="chomebanking_transacciones", meses_anomalos=[201910, 202006])
     df = pisar_con_mes_anterior_duckdb(df, variable="ccajas_transacciones", meses_anomalos=[202006])
