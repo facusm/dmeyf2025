@@ -16,18 +16,18 @@ def pisar_con_mes_anterior_duckdb(
     """
     Para cada mes en `meses_anomalos`, pisa `variable` con el último valor válido
     PREVIO del mismo cliente, considerando solo meses NO anómalos.
-    
+
     - Si no hay valor previo válido -> deja NaN en el mes anómalo.
-    - No mira el futuro (solo valores anteriores).
-    - Soporta meses anómalos consecutivos:
-        toda la racha se rellena con el último mes sano previo (si existe).
-    - Solo modifica filas cuyo mes está en meses_anomalos.
+    - No usa información futura (solo valores anteriores).
+    - Soporta meses anómalos consecutivos: toda la racha usa el último mes sano previo.
+    - Solo modifica filas cuyo mes está en `meses_anomalos`.
     """
     if not meses_anomalos:
         return df
 
     meses_anomalos = [int(m) for m in meses_anomalos]
 
+    # Trabajamos con columnas mínimas
     slim = df[[id_col, mes_col, variable]].copy()
 
     con = duckdb.connect()
@@ -50,20 +50,21 @@ def pisar_con_mes_anterior_duckdb(
         LEFT JOIN meses_bad m
           ON b.t_ = CAST(m.{mes_col} AS BIGINT)
     ),
-    -- Solo consideramos como "fuente válida" los meses NO anómalos
     fuente AS (
+        -- Solo los meses NO anómalos aportan valores como fuente
         SELECT
             id_,
             t_,
-            CASE WHEN is_bad THEN NULL ELSE v_ END AS v_fuente,
-            is_bad
+            v_,
+            is_bad,
+            CASE WHEN is_bad THEN NULL ELSE v_ END AS v_fuente
         FROM mark
     ),
-    -- prev_good: último valor válido de un mes NO anómalo hacia atrás
     w AS (
         SELECT
             *,
-            LAST_VALUE(v_fuente) IGNORE NULLS OVER (
+            -- prev_good = último v_fuente no nulo hacia atrás (solo meses sanos)
+            MAX_BY(v_fuente, t_) OVER (
                 PARTITION BY id_
                 ORDER BY t_
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
@@ -74,6 +75,9 @@ def pisar_con_mes_anterior_duckdb(
         SELECT
             id_  AS {id_col},
             t_   AS {mes_col},
+            is_bad,
+            v_,
+            prev_good,
             CASE
               WHEN is_bad THEN prev_good   -- mes anómalo -> último sano previo (o NULL)
               ELSE v_                      -- mes normal -> valor original
@@ -84,20 +88,26 @@ def pisar_con_mes_anterior_duckdb(
     """
 
     corr = con.execute(query).df()
-    out = df.merge(corr, on=[id_col, mes_col], how="left")
+
+    # Merge con el df original
+    out = df.merge(corr[[id_col, mes_col, "is_bad", "v_corr"]],
+                   on=[id_col, mes_col],
+                   how="left")
 
     # Solo tocar meses anómalos
-    mask_bad = out[mes_col].isin(meses_anomalos)
+    mask_bad = out["is_bad"] == True
 
-    # Si tenemos prev_good (v_corr notna) -> pisamos
+    # Donde hay prev_good -> pisamos
     mask_ok = mask_bad & out["v_corr"].notna()
     out.loc[mask_ok, variable] = out.loc[mask_ok, "v_corr"]
 
-    # Si NO tenemos prev_good -> NaN (aunque el original fuera 0/basura)
+    # Donde NO hay prev_good -> NaN (aunque el original fuera 0 / roto)
     mask_no_prev = mask_bad & out["v_corr"].isna()
     out.loc[mask_no_prev, variable] = np.nan
 
-    out.drop(columns=["v_corr"], inplace=True)
+    # Limpiar columnas auxiliares
+    out.drop(columns=["is_bad", "v_corr"], inplace=True)
+
     return out
 
 
