@@ -7,6 +7,7 @@ import duckdb
 
 from src.data_load_preparation import cargar_datos
 from .features import (
+    pisar_con_mes_anterior_duckdb,
     feature_engineering_lag,
     feature_engineering_min_max,
     feature_engineering_deltas,
@@ -15,7 +16,7 @@ from .features import (
     feature_engineering_ratios,
     feature_engineering_medias_moviles_lag,
     generar_shock_relativo_delta_lag,
-    crear_indicador_aguinaldo,
+    crear_indicador_aguinaldo
 )
 from config.config import BUCKET_PATH_b1, FILE_BASE, VERSION
 
@@ -50,15 +51,72 @@ def main():
 
     # 00. DEFINICIÓN DE PATHS
     path_input = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}.csv.gz")
-    path_output = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.csv.gz")
+    path_output = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.parquet")
 
     logger.info(f"📥 Leyendo dataset desde: {path_input}")
-    logger.info(f"📤 Guardando resultado en: {path_output}")
+    logger.info(f"📤 Resultado final (Parquet): {path_output}")
 
     # 01. CARGA DE DATOS
     df = pd.read_csv(path_input, compression="gzip")
-    df.drop(columns=["mprestamos_personales", "cprestamos_personales"], inplace=True, errors="ignore")
     logger.info(f"✅ Dataset cargado correctamente con forma: {df.shape}")
+
+    # 01.1 Eliminación de columnas con posible data drift
+    
+    logger.info("Eliminando columnas con posible data drift / poco confiables...")
+    df.drop(columns=["mprestamos_personales", "cprestamos_personales", "internet", "cpagodeservicios", "mpagodeservicios", "tmobile_app", "cmobile_app_trx"], inplace=True, errors="ignore")  # Chequear prestamos prendarios, hipotecarios, m y c, mpayroll2 (valores negativos en la media), ctransferencias_recibidas, mtransferencias_recibidas (201905 a 201906 hay algo raro), Master_mfinanciacion_limite (hay picos raros, idem Visa_mfinanciacion_limite)
+
+
+    # 01.2 Data processing inicial
+    # Corrección de variables con meses anómalos con mes anterior. Si no hay mes anterior, se deja el valor en nan para el mes anomalo.
+
+    logger.info("🩺 Corrigiendo meses anómalos usando valores del mes anterior...")
+    df = pisar_con_mes_anterior_duckdb(df, variable="active_quarter", meses_anomalos=[202006]) 
+    df = pisar_con_mes_anterior_duckdb(df, variable="mrentabilidad", meses_anomalos=[201905, 201910, 202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mrentabilidad_annual", meses_anomalos=[201905, 201910, 202006])  
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcomisiones", meses_anomalos=[201905, 201910, 202006]) 
+    df = pisar_con_mes_anterior_duckdb(df, variable="mpasivos_margen", meses_anomalos=[201905, 201910, 202006]) 
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcuentas_saldo", meses_anomalos=[202006]) 
+    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_debito_transacciones", meses_anomalos=[202006]) 
+    df = pisar_con_mes_anterior_duckdb(df, variable="mautoservicio", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_visa_transacciones", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mtarjeta_visa_consumo", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_master_transacciones", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mtarjeta_master_consumo", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_visa_debitos_automaticos", meses_anomalos=[201904])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mttarjeta_visa_debitos_automaticos", meses_anomalos=[201904])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccajeros_propios_descuentos", meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcajeros_propios_descuentos", meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_visa_descuentos", meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mtarjeta_visa_descuentos", meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_master_descuentos", meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mtarjeta_master_descuentos", meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccomisiones_otras", meses_anomalos=[201905, 201910, 202006]) 
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcomisiones_otras", meses_anomalos=[201905, 201910, 202006]) 
+    df = pisar_con_mes_anterior_duckdb(df, variable="cextraccion_autoservicio", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mextraccion_autoservicio", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccheques_depositados", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcheques_depositados", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccheques_emitidos", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcheques_emitidos", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccheques_depositados_rechazados", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcheques_depositados_rechazados", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccheques_emitidos_rechazados", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="mcheques_emitidos_rechazados", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="tcallcenter", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="callcenter_transacciones", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="thomebanking", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="chomebanking_transacciones", meses_anomalos=[201910, 202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccajas_transacciones", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccajas_consultas", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccajas_depositos", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccajas_extracciones", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ccajas_otras", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="catm_trx", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="matm", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="catm_trx_other", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="matm_other", meses_anomalos=[202006])
+    df = pisar_con_mes_anterior_duckdb(df, variable="ctrx_quarter", meses_anomalos=[202006])
+    logger.info("✅ Corrección de meses anómalos finalizada")
 
     # 02. FEATURE ENGINEERING
     atributos = [
@@ -95,8 +153,8 @@ def main():
         ("mtarjeta_visa_consumo", "mcuentas_saldo")
     ]
 
-    cant_lag = 2
-    window_size = 2
+    cant_lag = 4
+    window_size = 4
 
     logger.info("🔧 Iniciando feature engineering...")
 
@@ -113,7 +171,7 @@ def main():
     # 03. GUARDAR DIRECTAMENTE EN EL BUCKET (modo Parquet optimizado con DuckDB)
     logger.info("💾 Guardando dataset final en formato Parquet (rápido y eficiente)...")
 
-    path_output = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.parquet")
+    
 
     con = duckdb.connect(database=':memory:')
     con.register("df_fe", df_fe)

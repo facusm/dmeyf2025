@@ -1,8 +1,106 @@
 import pandas as pd
 import duckdb
 import logging
+import numpy as np
 
 logger = logging.getLogger("__name__")
+
+
+def pisar_con_mes_anterior_duckdb(
+    df: pd.DataFrame,
+    variable: str,
+    meses_anomalos: list,                 # ej: [201905, 202006]
+    id_col: str = "numero_de_cliente",
+    mes_col: str = "foto_mes",
+) -> pd.DataFrame:
+    """
+    Para cada mes en `meses_anomalos`, pisa `variable` con el último valor válido
+    PREVIO del mismo cliente, considerando solo meses NO anómalos.
+    
+    - Si no hay valor previo válido -> deja NaN en el mes anómalo.
+    - No mira el futuro (solo valores anteriores).
+    - Soporta meses anómalos consecutivos:
+        toda la racha se rellena con el último mes sano previo (si existe).
+    - Solo modifica filas cuyo mes está en meses_anomalos.
+    """
+    if not meses_anomalos:
+        return df
+
+    meses_anomalos = [int(m) for m in meses_anomalos]
+
+    slim = df[[id_col, mes_col, variable]].copy()
+
+    con = duckdb.connect()
+    con.execute("PRAGMA threads = system;")
+    con.register("t_in", slim)
+    con.register("meses_bad", pd.DataFrame({mes_col: meses_anomalos}))
+
+    query = f"""
+    WITH base AS (
+        SELECT
+            {id_col} AS id_,
+            CAST({mes_col} AS BIGINT) AS t_,
+            CAST({variable} AS DOUBLE) AS v_
+        FROM t_in
+    ),
+    mark AS (
+        SELECT
+            b.*,
+            (m.{mes_col} IS NOT NULL) AS is_bad
+        FROM base b
+        LEFT JOIN meses_bad m
+          ON b.t_ = CAST(m.{mes_col} AS BIGINT)
+    ),
+    -- Solo consideramos como "fuente válida" los meses NO anómalos
+    fuente AS (
+        SELECT
+            id_,
+            t_,
+            CASE WHEN is_bad THEN NULL ELSE v_ END AS v_fuente,
+            is_bad
+        FROM mark
+    ),
+    -- prev_good: último valor válido de un mes NO anómalo hacia atrás
+    w AS (
+        SELECT
+            *,
+            LAST_VALUE(v_fuente) IGNORE NULLS OVER (
+                PARTITION BY id_
+                ORDER BY t_
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS prev_good
+        FROM fuente
+    ),
+    resolved AS (
+        SELECT
+            id_  AS {id_col},
+            t_   AS {mes_col},
+            CASE
+              WHEN is_bad THEN prev_good   -- mes anómalo -> último sano previo (o NULL)
+              ELSE v_                      -- mes normal -> valor original
+            END AS v_corr
+        FROM w
+    )
+    SELECT * FROM resolved
+    """
+
+    corr = con.execute(query).df()
+    out = df.merge(corr, on=[id_col, mes_col], how="left")
+
+    # Solo tocar meses anómalos
+    mask_bad = out[mes_col].isin(meses_anomalos)
+
+    # Si tenemos prev_good (v_corr notna) -> pisamos
+    mask_ok = mask_bad & out["v_corr"].notna()
+    out.loc[mask_ok, variable] = out.loc[mask_ok, "v_corr"]
+
+    # Si NO tenemos prev_good -> NaN (aunque el original fuera 0/basura)
+    mask_no_prev = mask_bad & out["v_corr"].isna()
+    out.loc[mask_no_prev, variable] = np.nan
+
+    out.drop(columns=["v_corr"], inplace=True)
+    return out
+
 
 def feature_engineering_lag(df: pd.DataFrame, columnas: list[str], cant_lag: int = 1) -> pd.DataFrame:
     """
