@@ -61,8 +61,8 @@ SEMILLAS = [
 # UNDERSAMPLING
 # ==================================================================================
 
-APLICAR_UNDERSAMPLING = False
-RATIO_UNDERSAMPLING = 1.0  # 1.0 => sin undersampling efectivo
+APLICAR_UNDERSAMPLING = True
+RATIO_UNDERSAMPLING = 0.1  
 
 def _tag_us():
     if (not APLICAR_UNDERSAMPLING) or (RATIO_UNDERSAMPLING >= 0.999):
@@ -131,7 +131,7 @@ for path in [EXPERIMENT_DIR, DB_PATH, MODELOS_PATH, LOGS_PATH, RESULTADOS_PREDIC
 NOMBRE_DE_ESTUDIO_OPTUNA = f"{NOMBRE_EXPERIMENTO}_optuna"
 NOMBRE_BASE_DE_DATOS_OPTUNA = f"{NOMBRE_EXPERIMENTO}_optuna_study.db"
 
-N_TRIALS = 80
+N_TRIALS = 50
 N_STARTUP_TRIALS = 20
 
 # ==================================================================================
