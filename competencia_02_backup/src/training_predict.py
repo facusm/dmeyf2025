@@ -1,5 +1,3 @@
-# src/training_predict.py
-
 import lightgbm as lgb
 import numpy as np
 import os
@@ -37,20 +35,11 @@ def entrenar_ensemble_multisemilla(X_train_inicial, y_train_inicial, w_train_ini
                                    nombre_experimento=NOMBRE_EXPERIMENTO):
     """
     Entrena un ensemble de modelos con múltiples semillas.
-
-    Fase 1:
-        - Entrena con X_train_inicial (histórico hasta cierto corte).
-        - Predice sobre X_valid (mes de validación externa).
-        - Usa esas predicciones para calcular umbrales por semilla.
-
-    Fase 2:
-        - Re-entrena con X_train_completo (histórico + validaciones).
-        - Predice sobre X_test (meses de test final).
     """
     semillas = semillas or SEMILLAS
 
-    probabilidades_valid = []
-    probabilidades_test = []
+    probabilidades_abril = []
+    probabilidades_junio = []
     umbrales_individuales = []
     ganancias_individuales = []
     modelos_finales = []
@@ -62,30 +51,30 @@ def entrenar_ensemble_multisemilla(X_train_inicial, y_train_inicial, w_train_ini
     for i, seed in enumerate(semillas, 1):
         logger.info(f"\n🌱 Semilla {seed} ({i}/{len(semillas)})")
 
-        # --- FASE 1: Entrenar con datos iniciales y predecir en validación ---
-        model_valid = entrenar_modelo_single_seed(
+        # --- FASE 1: Entrenar con datos iniciales y predecir en abril ---
+        model_abril = entrenar_modelo_single_seed(
             X_train_inicial, y_train_inicial, w_train_inicial,
             params, num_boost_round, seed
         )
 
-        y_pred_valid = model_valid.predict(X_valid)
-        probabilidades_valid.append(y_pred_valid)
+        y_pred_abril = model_abril.predict(X_valid)
+        probabilidades_abril.append(y_pred_abril)
 
-        # Calcular umbral y ganancia individual en validación
-        umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_valid, w_valid)
+        # Calcular umbral y ganancia individual
+        umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_abril, w_valid)
         umbrales_individuales.append(umbral)
         ganancias_individuales.append(ganancia)
 
-        logger.info(f"   📊 Umbral (valid): {umbral:.6f}, N={N_opt}, Ganancia=${ganancia:,.0f}")
+        logger.info(f"   📊 Umbral: {umbral:.6f}, N={N_opt}, Ganancia=${ganancia:,.0f}")
 
-        # --- FASE 2: Re-entrenar con datos completos y predecir en test final ---
+        # --- FASE 2: Re-entrenar con datos completos y predecir en junio ---
         model_final = entrenar_modelo_single_seed(
             X_train_completo, y_train_completo, w_train_completo,
             params, num_boost_round, seed
         )
 
-        y_pred_test = model_final.predict(X_test)
-        probabilidades_test.append(y_pred_test)
+        y_pred_junio = model_final.predict(X_test)
+        probabilidades_junio.append(y_pred_junio)
         modelos_finales.append(model_final)
 
         # Guardar modelo final si está habilitado
@@ -100,8 +89,8 @@ def entrenar_ensemble_multisemilla(X_train_inicial, y_train_inicial, w_train_ini
     logger.info(f"{'='*60}")
 
     return {
-        "probabilidades_valid": probabilidades_valid,
-        "probabilidades_test": probabilidades_test,
+        "probabilidades_abril": probabilidades_abril,
+        "probabilidades_junio": probabilidades_junio,
         "umbrales_individuales": umbrales_individuales,
         "ganancias_individuales": ganancias_individuales,
         "modelos_finales": modelos_finales
@@ -121,29 +110,28 @@ def crear_ensemble_predictions(probabilidades_list):
     return ensemble
 
 
-def evaluar_ensemble_y_umbral(probabilidades_valid, probabilidades_test,
+def evaluar_ensemble_y_umbral(probabilidades_abril, probabilidades_junio,
                               w_valid, umbrales_individuales):
     """
-    Evalúa el ensemble multisemilla:
-      - Promedia predicciones en validación para encontrar umbral óptimo.
-      - Aplica ese umbral al ensemble en test final.
+    Evalúa el ensemble multisemilla, optimiza el umbral en validación
+    y aplica ese umbral al conjunto final.
     """
-    # Promediar predicciones en validación
-    matriz_valid = np.array(probabilidades_valid)
-    probabilidades_valid_ensemble = np.mean(matriz_valid, axis=0)
+    # Promediar predicciones de abril
+    matriz_abril = np.array(probabilidades_abril)
+    probabilidades_abril_ensemble = np.mean(matriz_abril, axis=0)
 
     logger.info(f"\n{'='*60}")
-    logger.info("🎯 CREANDO ENSEMBLE EN VALIDACIÓN Y OPTIMIZANDO UMBRAL")
+    logger.info("🎯 CREANDO ENSEMBLE DE ABRIL Y OPTIMIZANDO UMBRAL")
     logger.info(f"{'='*60}")
-    logger.info(f"📊 Ensemble validación: shape={matriz_valid.shape}")
+    logger.info(f"📊 Ensemble abril: shape={matriz_abril.shape}")
 
-    # Encontrar umbral óptimo del ensemble en validación
+    # Encontrar umbral óptimo del ensemble
     umbral_ensemble, N_ensemble, ganancia_ensemble, curva_ensemble = mejor_umbral_probabilidad(
-        probabilidades_valid_ensemble,
+        probabilidades_abril_ensemble,
         w_valid
     )
 
-    logger.info(f"✅ UMBRAL ÓPTIMO DEL ENSEMBLE (valid): {umbral_ensemble:.6f}")
+    logger.info(f"✅ UMBRAL ÓPTIMO DEL ENSEMBLE: {umbral_ensemble:.6f}")
     logger.info(f"   N={N_ensemble}, Ganancia=${ganancia_ensemble:,.0f}")
 
     # Comparar con umbral promedio individual
@@ -151,31 +139,31 @@ def evaluar_ensemble_y_umbral(probabilidades_valid, probabilidades_test,
     logger.info(f"   Umbral promedio individual={umbral_promedio_individual:.6f}")
     logger.info(f"   Desv. std umbrales={np.std(umbrales_individuales):.6f}")
 
-    # Promediar predicciones en test final
-    matriz_test = np.array(probabilidades_test)
-    probabilidades_test_ensemble = np.mean(matriz_test, axis=0)
+    # Promediar predicciones de junio
+    matriz_junio = np.array(probabilidades_junio)
+    probabilidades_junio_ensemble = np.mean(matriz_junio, axis=0)
 
     logger.info(f"\n{'='*60}")
-    logger.info("🚀 APLICANDO UMBRAL AL ENSEMBLE EN TEST FINAL")
+    logger.info("🚀 APLICANDO UMBRAL AL ENSEMBLE DE JUNIO")
     logger.info(f"{'='*60}")
-    logger.info(f"📊 Ensemble test final: shape={matriz_test.shape}")
+    logger.info(f"📊 Ensemble junio: shape={matriz_junio.shape}")
 
-    # Aplicar umbral óptimo encontrado en validación al test final
-    prediccion_final_binaria = (probabilidades_test_ensemble >= umbral_ensemble).astype(int)
+    # Aplicar umbral del ensemble de abril
+    prediccion_final_binaria = (probabilidades_junio_ensemble >= umbral_ensemble).astype(int)
     N_enviados_final = prediccion_final_binaria.sum()
 
     logger.info(f"✅ PREDICCIÓN FINAL CON ENSEMBLE")
     logger.info(f"   🎯 Umbral usado: {umbral_ensemble:.6f}")
     logger.info(f"   📮 Clientes marcados: {N_enviados_final:,}")
-    logger.info(f"   📊 Proporción de positivos: {N_enviados_final / len(prediccion_final_binaria) * 100:.2f}%")
+    logger.info(f"   📊 Proporción de positivos: {N_enviados_final/len(prediccion_final_binaria)*100:.2f}%")
 
     return {
         "umbral_optimo_ensemble": umbral_ensemble,
         "N_en_umbral": N_ensemble,
-        "ganancia_maxima_valid": ganancia_ensemble,
+        "ganancia_maxima_abril": ganancia_ensemble,
         "umbral_promedio_individual": umbral_promedio_individual,
-        "probabilidades_valid_ensemble": probabilidades_valid_ensemble,
-        "probabilidades_test_ensemble": probabilidades_test_ensemble,
+        "probabilidades_abril_ensemble": probabilidades_abril_ensemble,
+        "probabilidades_junio_ensemble": probabilidades_junio_ensemble,
         "prediccion_binaria": prediccion_final_binaria,
         "N_enviados": N_enviados_final,
         "curva_ganancia": curva_ensemble

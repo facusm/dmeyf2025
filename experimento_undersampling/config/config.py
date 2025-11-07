@@ -38,10 +38,10 @@ APLICAR_UNDERSAMPLING = False  # Activar/desactivar undersampling
 RATIO_UNDERSAMPLING = 1.0  
 
 # === CONFIGURACIÓN DE MESES Y SEMILLAS === #
-MESES_TRAIN = list(range(201901, 202105))   # 201901–202012 → entrenamiento base
-MES_VAL_OPTUNA = [202105]                   # validación interna (para Optuna)
-MES_VALID = [202106]                        # validación externa (para ajustar umbral)
-MES_TEST_FINAL = [202108]                  # prueba final (resultados finales)
+MESES_TRAIN = list(range(201901, 202101))   # 201901–202012 → entrenamiento base
+MES_VAL_OPTUNA = [202101]                   # validación interna (para Optuna)
+MES_VALID = [202102]                        # validación externa (para ajustar umbral)
+MES_TEST_FINAL = [202104, 202106]                  # prueba final (resultados finales)
 
 SEMILLAS = [181459, 306491, 336251, 900577, 901751, 182009, 182011, 182027, 182029, 182041]
 
