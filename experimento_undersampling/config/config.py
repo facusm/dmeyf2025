@@ -10,7 +10,7 @@ BUCKET_PATH_b1 = "/home/sanmartinofacundo/buckets/b1"
 
 LOCAL_DATA_DIR = "/home/sanmartinofacundo/datasets"
 DATASET_CRUDO_PATH = os.path.join(LOCAL_DATA_DIR, "competencia_02_crudo.csv.gz")
-DATASET_TARGETS_CREADOS_PATH = os.path.join(BUCKET_PATH_b1, "competencia_02_crudo.csv.gz")
+DATASET_TARGETS_CREADOS_PATH = os.path.join(BUCKET_PATH_b1, "competencia_02.csv.gz")
 
 FILE_BASE = "competencia_02"
 PROJECT_NAME = "competencia02"
