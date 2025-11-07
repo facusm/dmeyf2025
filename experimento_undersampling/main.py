@@ -9,10 +9,9 @@ from config.config import (
     SEMILLAS,
     SUFIJO_FE,
     MES_TEST_FINAL,
-    BUCKET_PATH_b1,
-    FILE_BASE,
-    VERSION,
+    FE_PATH,
     LOGS_PATH,
+    NOMBRE_EXPERIMENTO,
 )
 from src.data_load_preparation import (
     cargar_datos,
@@ -50,11 +49,13 @@ def setup_logger():
         logger.addHandler(sh)
 
         # Archivo
-        fh = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+        fh = logging.FileHandler(log_path, mode="w", encoding="utf-8")
         fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
         logger.addHandler(fh)
 
     logger.info(f"📂 Logging iniciado. Archivo: {log_path}")
+    logger.info(f"🏷️ Experimento: {NOMBRE_EXPERIMENTO}")
+    logger.info(f"🏷️ Versión FE: {SUFIJO_FE}")
     return logger
 
 
@@ -64,11 +65,14 @@ def setup_logger():
 def main():
     setup_logger()
     logger.info(f"\n{'=' * 80}")
-    logger.info(f"🚀 INICIO PIPELINE - FE: {SUFIJO_FE}")
+    logger.info(f"🚀 INICIO PIPELINE")
+    logger.info(f"🏷️ Experimento: {NOMBRE_EXPERIMENTO}")
+    logger.info(f"🏷️ FE utilizado: {SUFIJO_FE}")
     logger.info(f"{'=' * 80}\n")
 
-    # 1️⃣ Carga de datos
-    path_input = os.path.join(BUCKET_PATH_b1, f"{FILE_BASE}_FE_{VERSION}.parquet")
+    # 1️⃣ Carga de datos (siempre desde el FE_PATH definido en config)
+    path_input = FE_PATH
+    logger.info(f"📥 Cargando dataset FE desde: {path_input}")
     data = cargar_datos(path_input)
     data = preparar_clases_y_pesos(data)
 
@@ -158,7 +162,7 @@ def main():
         umbrales_individuales=ensemble_result["umbrales_individuales"],
         umbral_promedio_individual=eval_result["umbral_promedio_individual"],
         umbral_ensemble=eval_result["umbral_optimo_ensemble"],
-        umbral_aplicado_test=eval_result["umbral_optimo_ensemble"],  # si quisieras ajustarlo, cambiás acá
+        umbral_aplicado_test=eval_result["umbral_optimo_ensemble"],
         ganancia_ensemble=eval_result["ganancia_maxima_valid"],
         N_ensemble=eval_result["N_en_umbral"],
         semillas=SEMILLAS,
@@ -169,6 +173,7 @@ def main():
 
     logger.info(f"\n{'=' * 80}")
     logger.info("✅ PIPELINE COMPLETADO EXITOSAMENTE")
+    logger.info(f"🏷️ Experimento: {NOMBRE_EXPERIMENTO}")
     logger.info(f"{'=' * 80}\n")
 
 
