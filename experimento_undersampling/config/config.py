@@ -38,8 +38,9 @@ FE_PATH = os.path.join(FEATURES_DIR, FE_FILENAME)
 MESES_TRAIN = [
     201901, 201902, 201903, 201904, 201905, 201906,
     201907, 201908, 201909, 201910, 201911, 201912,
-    202001, 202002, 202003, 202004, 202005, 202006,
-    202007, 202008, 202009, 202010, 202011, 202012,
+    202001, 202002,
+    # saltamos marzo–octubre 2020 (meses con pandemia)
+    202011, 202012,
 ]
 
 # Validación interna (Optuna)
@@ -62,7 +63,7 @@ SEMILLAS = [
 # ==================================================================================
 
 APLICAR_UNDERSAMPLING = True
-RATIO_UNDERSAMPLING = 0.1  
+RATIO_UNDERSAMPLING = 0.1 
 
 def _tag_us():
     if (not APLICAR_UNDERSAMPLING) or (RATIO_UNDERSAMPLING >= 0.999):
