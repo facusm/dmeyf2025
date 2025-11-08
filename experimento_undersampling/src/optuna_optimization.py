@@ -1,5 +1,3 @@
-# src/optuna_optimization.py
-
 import os
 import numpy as np
 import lightgbm as lgb
@@ -26,7 +24,6 @@ def lgb_gan_eval(y_pred, data):
     """
     weight = data.get_weight()
 
-    # Ganancia por registro ordenado por probabilidad descendente
     ganancia = (
         np.where(weight == 1.00002, GANANCIA_ACIERTO, 0)
         - np.where(weight < 1.00002, abs(COSTO_ESTIMULO), 0)
@@ -123,17 +120,22 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
             ],
         )
 
-        best_iters.append(model.best_iteration)
+        # 🔧 Nos aseguramos de guardar tipos nativos de Python
+        best_iters.append(int(model.best_iteration))
 
         y_pred = model.predict(X_valid, num_iteration=model.best_iteration)
         _, _, ganancia, _ = mejor_umbral_probabilidad(y_pred, w_valid)
-        ganancias_semillas.append(ganancia)
+        ganancias_semillas.append(float(ganancia))
 
     gan_prom = float(np.mean(ganancias_semillas))
     best_iter_prom = int(np.mean(best_iters))
 
-    trial.set_user_attr("ganancias_semillas", ganancias_semillas)
-    trial.set_user_attr("best_iter", best_iter_prom)
+    # 🔧 FIX: convertir a tipos JSON-serializables antes de guardarlos en user_attr
+    trial.set_user_attr(
+        "ganancias_semillas",
+        [float(g) for g in ganancias_semillas],
+    )
+    trial.set_user_attr("best_iter", int(best_iter_prom))
 
     return gan_prom
 
