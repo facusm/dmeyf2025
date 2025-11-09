@@ -44,18 +44,9 @@ def entrenar_ensemble_multisemilla(
     nombre_experimento=NOMBRE_EXPERIMENTO,
 ):
     """
-    Entrena un ensemble de modelos con múltiples semillas, totalmente trazable por experimento.
-
-    Fase 1:
-        - Entrena con X_train_inicial.
-        - Predice sobre X_valid.
-        - Calcula umbral óptimo y ganancia por semilla.
-
-    Fase 2:
-        - Re-entrena con X_train_completo.
-        - Predice sobre X_test.
-        - Guarda modelos en:
-              MODELOS_PATH/{nombre_experimento}_seed{seed}_final.txt
+    Entrena un ensemble de modelos con múltiples semillas.
+    Si el proceso se interrumpe, al reanudar verifica si los modelos
+    ya existen en MODELOS_PATH y los carga en lugar de reentrenarlos.
     """
     semillas = semillas or SEMILLAS
 
@@ -68,7 +59,7 @@ def entrenar_ensemble_multisemilla(
     os.makedirs(MODELOS_PATH, exist_ok=True)
 
     logger.info(f"\n{'=' * 60}")
-    logger.info(f"🌱 ENTRENANDO ENSEMBLE MULTISEMILLA")
+    logger.info("🌱 ENTRENANDO ENSEMBLE MULTISEMILLA (con reanudación automática)")
     logger.info(f"🏷️ Experimento: {nombre_experimento}")
     logger.info(f"🌱 Semillas: {semillas}")
     logger.info(f"{'=' * 60}")
@@ -76,47 +67,56 @@ def entrenar_ensemble_multisemilla(
     for i, seed in enumerate(semillas, 1):
         logger.info(f"\n🌱 Semilla {seed} ({i}/{len(semillas)})")
 
-        # --- FASE 1: Entrenar con datos iniciales y evaluar en validación ---
+        filename = f"{nombre_experimento}_seed{seed}_final.txt"
+        filepath = os.path.join(MODELOS_PATH, filename)
+
+        # --- 🔁 Si el modelo ya existe, lo cargamos directamente ---
+        if os.path.exists(filepath):
+            logger.info(f"🔁 Modelo ya encontrado en disco. Cargando desde: {filepath}")
+            model_final = lgb.Booster(model_file=filepath)
+
+            # No tenemos el modelo de validación, pero podemos regenerar predicciones sobre valid/test
+            y_pred_valid = model_final.predict(X_valid)
+            y_pred_test = model_final.predict(X_test)
+
+            umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_valid, w_valid)
+            umbrales_individuales.append(umbral)
+            ganancias_individuales.append(ganancia)
+
+            probabilidades_valid.append(y_pred_valid)
+            probabilidades_test.append(y_pred_test)
+            modelos_finales.append(model_final)
+
+            logger.info(f"✅ Modelo cargado. Umbral validación: {umbral:.6f}, Ganancia=${ganancia:,.0f}")
+            continue  # pasa a la siguiente seed
+
+        # --- 🚀 Si no existe, entrenamos normalmente ---
+        logger.info("⏳ Entrenando modelo nuevo...")
+
+        # FASE 1: Entrenar con datos iniciales y evaluar en validación
         model_valid = entrenar_modelo_single_seed(
-            X_train_inicial,
-            y_train_inicial,
-            w_train_inicial,
-            params,
-            num_boost_round,
-            seed,
+            X_train_inicial, y_train_inicial, w_train_inicial, params, num_boost_round, seed
         )
-
         y_pred_valid = model_valid.predict(X_valid)
-        probabilidades_valid.append(y_pred_valid)
-
         umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_valid, w_valid)
+
         umbrales_individuales.append(umbral)
         ganancias_individuales.append(ganancia)
+        probabilidades_valid.append(y_pred_valid)
 
-        logger.info(
-            f"   📊 Umbral validación (semilla {seed}): {umbral:.6f}, "
-            f"N={N_opt}, Ganancia=${ganancia:,.0f}"
-        )
+        logger.info(f"📊 Umbral validación (semilla {seed}): {umbral:.6f}, N={N_opt}, Ganancia=${ganancia:,.0f}")
 
-        # --- FASE 2: Re-entrenar con datos completos y predecir en test ---
+        # FASE 2: Reentrenar con datos completos
         model_final = entrenar_modelo_single_seed(
-            X_train_completo,
-            y_train_completo,
-            w_train_completo,
-            params,
-            num_boost_round,
-            seed,
+            X_train_completo, y_train_completo, w_train_completo, params, num_boost_round, seed
         )
-
         y_pred_test = model_final.predict(X_test)
         probabilidades_test.append(y_pred_test)
         modelos_finales.append(model_final)
 
         if guardar_modelos:
-            filename = f"{nombre_experimento}_seed{seed}_final.txt"
-            filepath = os.path.join(MODELOS_PATH, filename)
             model_final.save_model(filepath)
-            logger.info(f"   💾 Modelo final guardado en: {filepath}")
+            logger.info(f"💾 Modelo final guardado en: {filepath}")
 
     logger.info(f"\n{'=' * 60}")
     logger.info("✅ ENSEMBLE MULTISEMILLA COMPLETADO")
@@ -130,6 +130,7 @@ def entrenar_ensemble_multisemilla(
         "ganancias_individuales": ganancias_individuales,
         "modelos_finales": modelos_finales,
     }
+
 
 
 def crear_ensemble_predictions(probabilidades_list):
