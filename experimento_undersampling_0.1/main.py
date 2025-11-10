@@ -12,6 +12,8 @@ from config.config import (
     FE_PATH,
     LOGS_PATH,
     NOMBRE_EXPERIMENTO,
+    GANANCIA_ACIERTO,
+    COSTO_ESTIMULO,
 )
 from src.data_load_preparation import (
     cargar_datos,
@@ -134,7 +136,7 @@ def main():
         guardar_modelos=True,
     )
 
-    # 5️⃣ Evaluación del ensemble
+    # 5️⃣ Evaluación del ensemble (sobre valid externa) y obtención de umbral óptimo global
     logger.info("\n📈 Evaluando ensemble y determinando umbral óptimo...")
     eval_result = evaluar_ensemble_y_umbral(
         ensemble_result["probabilidades_valid"],
@@ -143,22 +145,27 @@ def main():
         ensemble_result["umbrales_individuales"],
     )
 
+    # Extraemos predicciones y probabilidades del ensemble sobre el test completo
+    prob_test_ensemble = eval_result["probabilidades_test_ensemble"]
+    pred_test_binaria = eval_result["prediccion_binaria"]
+
     # 6️⃣ Generación de archivos finales de submission — uno por cada mes de test
     logger.info("\n📦 Generando submissions por mes de test...")
 
-    # Extraemos el conjunto de test que coincide con las predicciones del ensemble
-    data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)]
+    # Subset de test alineado con las predicciones del ensemble
+    data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)].copy()
 
     for mes in MES_TEST_FINAL:
         logger.info(f"\n📅 Generando submission para mes de test: {mes}")
 
-        # Máscara sobre el subset de test
-        mask_mes = data_test["foto_mes"] == mes
-        test_mes = data_test[mask_mes]
+        # Máscara dentro del subset de test
+        mask_mes = (data_test["foto_mes"] == mes)
 
-        # Predicciones y probabilidades correspondientes a ese mes
-        pred_mes = eval_result["prediccion_binaria"][mask_mes.values]
-        prob_mes = eval_result["probabilidades_test_ensemble"][mask_mes.values]
+        test_mes = data_test.loc[mask_mes]
+        pred_mes = pred_test_binaria[mask_mes.values]
+        prob_mes = prob_test_ensemble[mask_mes.values]
+
+        N_enviados_mes = int((pred_mes == 1).sum())
 
         generar_reporte_ensemble(
             test_data=test_mes,
@@ -171,16 +178,46 @@ def main():
             ganancia_ensemble=eval_result["ganancia_maxima_valid"],
             N_ensemble=eval_result["N_en_umbral"],
             semillas=SEMILLAS,
-            N_enviados_final=(pred_mes == 1).sum(),
+            N_enviados_final=N_enviados_mes,
             nombre_modelo=f"ensemble_lgbm_{mes}",
             trial_number=study.best_trial.number,
         )
 
+    # 7️⃣ Diagnóstico ex-post de ganancia por mes de test (usa labels reales si existen)
+    logger.info(
+        "\n🧪 Diagnóstico ex-post: ganancia por mes de test "
+        "(usa clase_ternaria real, solo análisis fuera de competencia)..."
+    )
+
+    for mes in MES_TEST_FINAL:
+        mask_mes = (data_test["foto_mes"] == mes)
+        test_mes = data_test.loc[mask_mes]
+
+        # Si no hay clase_ternaria (como en un test real), se salta el diagnóstico
+        if "clase_ternaria" not in test_mes.columns:
+            logger.info(f"   ⚠️ Mes {mes}: no hay clase_ternaria, se omite diagnóstico.")
+            continue
+
+        pred_mes = pred_test_binaria[mask_mes.values]
+        is_envio = (pred_mes == 1)
+        enviados = int(is_envio.sum())
+
+        es_baja2 = (test_mes["clase_ternaria"] == "BAJA+2").values
+        aciertos_baja2 = int((is_envio & es_baja2).sum())
+
+        gan_mes = aciertos_baja2 * GANANCIA_ACIERTO + enviados * COSTO_ESTIMULO
+
+        logger.info(
+            f"   Mes {mes}: enviados={enviados:,}, "
+            f"aciertos_BAJA2={aciertos_baja2:,}, "
+            f"ganancia_ex_post=${gan_mes:,.0f}"
+        )
 
     logger.info(f"\n{'=' * 80}")
     logger.info("✅ PIPELINE COMPLETADO EXITOSAMENTE")
     logger.info(f"🏷️ Experimento: {NOMBRE_EXPERIMENTO}")
     logger.info(f"{'=' * 80}\n")
+
 
 
 if __name__ == "__main__":
