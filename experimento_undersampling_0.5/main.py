@@ -143,24 +143,29 @@ def main():
         ensemble_result["umbrales_individuales"],
     )
 
-    # 6️⃣ Generación del archivo final de submission
-    logger.info("\n📦 Generando submission final...")
+    # 6️⃣ Generación de archivo final de submission — uno por cada mes de test
+    logger.info("\n📦 Generando submissions por mes de test...")
 
-    generar_reporte_ensemble(
-        test_data=data[data["foto_mes"].isin(MES_TEST_FINAL)],
-        prediccion_final_binaria=eval_result["prediccion_binaria"],
-        probabilidades_test_ensemble=eval_result["probabilidades_test_ensemble"],
-        umbrales_individuales=ensemble_result["umbrales_individuales"],
-        umbral_promedio_individual=eval_result["umbral_promedio_individual"],
-        umbral_ensemble=eval_result["umbral_optimo_ensemble"],
-        umbral_aplicado_test=eval_result["umbral_optimo_ensemble"],
-        ganancia_ensemble=eval_result["ganancia_maxima_valid"],
-        N_ensemble=eval_result["N_en_umbral"],
-        semillas=SEMILLAS,
-        N_enviados_final=eval_result["N_enviados"],
-        nombre_modelo="ensemble_lgbm",
-        trial_number=study.best_trial.number,
-    )
+    for mes in MES_TEST_FINAL:
+        logger.info(f"\n📅 Generando submission para mes de test: {mes}")
+        test_data_mes = data[data["foto_mes"] == mes].copy()
+
+        generar_reporte_ensemble(
+            test_data=test_data_mes,
+            prediccion_final_binaria=eval_result["prediccion_binaria"],
+            probabilidades_test_ensemble=eval_result["probabilidades_test_ensemble"],
+            umbrales_individuales=ensemble_result["umbrales_individuales"],
+            umbral_promedio_individual=eval_result["umbral_promedio_individual"],
+            umbral_ensemble=eval_result["umbral_optimo_ensemble"],
+            umbral_aplicado_test=eval_result["umbral_optimo_ensemble"],
+            ganancia_ensemble=eval_result["ganancia_maxima_valid"],
+            N_ensemble=eval_result["N_en_umbral"],
+            semillas=SEMILLAS,
+            N_enviados_final=eval_result["N_enviados"],
+            nombre_modelo=f"ensemble_lgbm_{mes}",  # 🔹 agrega el mes al nombre del archivo
+            trial_number=study.best_trial.number,
+        )
+
 
     logger.info(f"\n{'=' * 80}")
     logger.info("✅ PIPELINE COMPLETADO EXITOSAMENTE")
