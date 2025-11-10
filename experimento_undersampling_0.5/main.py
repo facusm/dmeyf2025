@@ -143,24 +143,27 @@ def main():
         ensemble_result["umbrales_individuales"],
     )
 
-    # Extraer las predicciones binarias globales
-    prediccion_final_binaria = eval_result["prediccion_binaria"]
-
-    # 6️⃣ Generación de archivo final de submission — uno por cada mes de test
+    # 6️⃣ Generación de archivos finales de submission — uno por cada mes de test
     logger.info("\n📦 Generando submissions por mes de test...")
+
+    # Extraemos el conjunto de test que coincide con las predicciones del ensemble
+    data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)]
 
     for mes in MES_TEST_FINAL:
         logger.info(f"\n📅 Generando submission para mes de test: {mes}")
 
-        # Filtramos los registros correspondientes a ese mes
-        mask_mes = data["foto_mes"] == mes
-        test_mes = data.loc[mask_mes]
-        pred_mes = prediccion_final_binaria[mask_mes.values]
+        # Máscara sobre el subset de test
+        mask_mes = data_test["foto_mes"] == mes
+        test_mes = data_test[mask_mes]
+
+        # Predicciones y probabilidades correspondientes a ese mes
+        pred_mes = eval_result["prediccion_binaria"][mask_mes.values]
+        prob_mes = eval_result["probabilidades_test_ensemble"][mask_mes.values]
 
         generar_reporte_ensemble(
             test_data=test_mes,
             prediccion_final_binaria=pred_mes,
-            probabilidades_test_ensemble=eval_result["probabilidades_test_ensemble"][mask_mes.values],
+            probabilidades_test_ensemble=prob_mes,
             umbrales_individuales=ensemble_result["umbrales_individuales"],
             umbral_promedio_individual=eval_result["umbral_promedio_individual"],
             umbral_ensemble=eval_result["umbral_optimo_ensemble"],
