@@ -4,7 +4,8 @@ import os
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from config.config import RESULTADOS_PREDICCION_PATH
+
+from config.config import RESULTADOS_PREDICCION_PATH, NOMBRE_EXPERIMENTO
 from src.utils import logger  # usamos el logger global para consistencia
 
 
@@ -35,7 +36,7 @@ def generar_reporte_ensemble(
     - N_ensemble: N óptimo de enviados en validación.
     """
 
-    # === Directorio de salida dentro del bucket (ya creado desde config) ===
+    # === Directorio de salida (ya específico del experimento desde config) ===
     output_dir = RESULTADOS_PREDICCION_PATH
     os.makedirs(output_dir, exist_ok=True)
 
@@ -47,7 +48,8 @@ def generar_reporte_ensemble(
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     submission_filename = (
-        f"{nombre_modelo}_T{trial_number or 'final'}_U{umbral_aplicado_test:.6f}_"
+        f"{NOMBRE_EXPERIMENTO}_{nombre_modelo}_"
+        f"T{trial_number or 'final'}_U{umbral_aplicado_test:.6f}_"
         f"N{N_enviados_final}_{timestamp}.csv"
     )
     submission_path = os.path.join(output_dir, submission_filename)
@@ -58,6 +60,9 @@ def generar_reporte_ensemble(
     logger.info(f"\n{sep}")
     logger.info("📦 GENERANDO SUBMISSION CON ENSEMBLE")
     logger.info(f"{sep}")
+    logger.info(f"🏷️ Experimento: {NOMBRE_EXPERIMENTO}")
+    logger.info(f"📁 Carpeta resultados: {output_dir}")
+    logger.info(f"📝 Archivo submission: {submission_filename}")
     logger.info(f"🎯 Umbral usado en test final: {umbral_aplicado_test:.6f}")
     logger.info(f"📮 Número de envíos (test final): {N_enviados_final:,}")
 
@@ -106,9 +111,13 @@ def generar_reporte_ensemble(
 
     # === Resumen final ===
     logger.info(f"\n📮 Predicción final (test):")
-    logger.info(f"   Clientes a contactar:     {N_enviados_final:,} "
-                f"({N_enviados_final / len(prediccion_final_binaria) * 100:.2f}%)")
-    logger.info(f"   Clientes sin contactar:   {(prediccion_final_binaria == 0).sum():,}")
+    logger.info(
+        f"   Clientes a contactar:     {N_enviados_final:,} "
+        f"({N_enviados_final / len(prediccion_final_binaria) * 100:.2f}%)"
+    )
+    logger.info(
+        f"   Clientes sin contactar:   {(prediccion_final_binaria == 0).sum():,}"
+    )
 
     logger.info(f"\n✅ Archivo generado correctamente en: {submission_path}")
     logger.info(f"{sep}")
