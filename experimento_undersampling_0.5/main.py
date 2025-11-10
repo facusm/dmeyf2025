@@ -143,17 +143,24 @@ def main():
         ensemble_result["umbrales_individuales"],
     )
 
+    # Extraer las predicciones binarias globales
+    prediccion_final_binaria = eval_result["prediccion_binaria"]
+
     # 6️⃣ Generación de archivo final de submission — uno por cada mes de test
     logger.info("\n📦 Generando submissions por mes de test...")
 
     for mes in MES_TEST_FINAL:
         logger.info(f"\n📅 Generando submission para mes de test: {mes}")
-        test_data_mes = data[data["foto_mes"] == mes].copy()
+
+        # Filtramos los registros correspondientes a ese mes
+        mask_mes = data["foto_mes"] == mes
+        test_mes = data.loc[mask_mes]
+        pred_mes = prediccion_final_binaria[mask_mes.values]
 
         generar_reporte_ensemble(
-            test_data=test_data_mes,
-            prediccion_final_binaria=eval_result["prediccion_binaria"],
-            probabilidades_test_ensemble=eval_result["probabilidades_test_ensemble"],
+            test_data=test_mes,
+            prediccion_final_binaria=pred_mes,
+            probabilidades_test_ensemble=eval_result["probabilidades_test_ensemble"][mask_mes.values],
             umbrales_individuales=ensemble_result["umbrales_individuales"],
             umbral_promedio_individual=eval_result["umbral_promedio_individual"],
             umbral_ensemble=eval_result["umbral_optimo_ensemble"],
@@ -161,8 +168,8 @@ def main():
             ganancia_ensemble=eval_result["ganancia_maxima_valid"],
             N_ensemble=eval_result["N_en_umbral"],
             semillas=SEMILLAS,
-            N_enviados_final=eval_result["N_enviados"],
-            nombre_modelo=f"ensemble_lgbm_{mes}",  # 🔹 agrega el mes al nombre del archivo
+            N_enviados_final=(pred_mes == 1).sum(),
+            nombre_modelo=f"ensemble_lgbm_{mes}",
             trial_number=study.best_trial.number,
         )
 
