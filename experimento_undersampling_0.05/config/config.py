@@ -63,7 +63,7 @@ SEMILLAS = [
 # ==================================================================================
 
 APLICAR_UNDERSAMPLING = True
-RATIO_UNDERSAMPLING = 0.07 
+RATIO_UNDERSAMPLING = 0.05
 
 def _tag_us():
     if (not APLICAR_UNDERSAMPLING) or (RATIO_UNDERSAMPLING >= 0.999):
