@@ -20,8 +20,8 @@ PROJECT_NAME = "competencia02"
 # ==================================================================================
 
 # Describí acá la variante de FE (lags, ventanas, reglas, etc.)
-SUFIJO_FE = "fe_v2"
-VERSION = "v2"
+SUFIJO_FE = "fe_v3"
+VERSION = "v3"
 
 FEATURES_ROOT = os.path.join(BUCKET_PATH_b1, "features")
 FEATURES_DIR = os.path.join(FEATURES_ROOT, SUFIJO_FE)
@@ -34,11 +34,17 @@ FE_PATH = os.path.join(FEATURES_DIR, FE_FILENAME)
 # MESES (ACTUALIZADO CON LO QUE DEFINISTE)
 # ==================================================================================
 
-# Entrenamiento base: 201901–202012
-MESES_TRAIN = list(range(201901, 202105)) # Evaluar sacar algunos meses según los experimentos
+# Entrenamiento base: 201901–202103
+MESES_TRAIN = [
+    201901, 201902, 201903, 201904, 201905, 201906,
+    201907, 201908, 201909, 201910, 201911, 201912,
+    202001, 202002, 202003, 202004, 202005, 202006,
+    202007, 202008, 202009, 202010, 202011, 202012,
+    202101, 202102, 202103, 
+] # Evaluar sacar algunos meses según los experimentos
 
 # Validación interna (Optuna)
-MES_VAL_OPTUNA = [202105]
+MES_VAL_OPTUNA = [202104, 202105]
 
 # Validación externa (ajuste de umbral / sanity check)
 MES_VALID = [202106]
@@ -48,16 +54,22 @@ MES_TEST_FINAL = [202108]
 
 # Semillas para ensemble
 SEMILLAS = [
-    181459, 306491, 336251, 900577, 901751,
-    182009, 182011, 182027, 182029, 182041,
+    306491, 336251, 900577, 182009, 182011,
+    182027, 182029, 182041,
+    101111, 103333, 105227, 107071, 109037,
+    113483, 117109, 119617, 123457, 127043,
+    130363, 137111, 139129, 149111, 151007,
+    157337, 163811, 167009, 173807, 179989,
+    191141, 197813
 ]
+
 
 # ==================================================================================
 # UNDERSAMPLING
 # ==================================================================================
 
 APLICAR_UNDERSAMPLING = True
-RATIO_UNDERSAMPLING = 0.5 
+RATIO_UNDERSAMPLING = 0.1 
 
 def _tag_us():
     if (not APLICAR_UNDERSAMPLING) or (RATIO_UNDERSAMPLING >= 0.999):
