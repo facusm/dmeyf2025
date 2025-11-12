@@ -219,19 +219,17 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
         _, _, gan_seed, _ = mejor_umbral_probabilidad(y_pred, w_valid)
         ganancias_semillas.append(float(gan_seed))
 
-        # ---------- Pruning opcional entre seeds ----------
-        # Tomamos la ganancia del ensemble parcial hasta esta seed
+        # ---------- Logging informativo entre seeds ----------
         y_pred_ens_parcial = sum_preds_valid / (i + 1)
         _, _, gan_ens_parcial, _ = mejor_umbral_probabilidad(
             y_pred_ens_parcial,
             w_valid,
         )
 
-        trial.report(float(gan_ens_parcial), step=i)
-
-        if trial.should_prune():
-            raise optuna.TrialPruned()
-        # Si no querés pruning por seed, borrá trial.report(...) y este bloque.
+        logger.info(
+            f"🧩 Trial {trial.number} | Seed {i+1}/{len(semilleros)} ({seed}) | "
+            f"Ganancia parcial ensemble: ${gan_ens_parcial:,.0f}"
+        )
 
     # ========= Ensemble final (todas las seeds) =========
     y_pred_ensemble = sum_preds_valid / len(semilleros)
@@ -251,8 +249,13 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
     trial.set_user_attr("N_opt_ensemble", int(N_opt_ens))
     trial.set_user_attr("n_train", int(n_train))
 
+    logger.info(
+        f"✅ Trial {trial.number} COMPLETADO | Ganancia ensemble final: ${ganancia_ens:,.0f}"
+    )
+
     # Objetivo: ganancia del ensemble en validación
     return float(ganancia_ens)
+
 
 
 def ejecutar_optimizacion(
