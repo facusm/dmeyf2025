@@ -25,76 +25,138 @@ def entrenar_modelo_single_seed(X_train, y_train, w_train, params, num_boost_rou
     return model
 
 
-def entrenar_ensemble_multisemilla(X_train_inicial, y_train_inicial, w_train_inicial,
-                                   X_train_completo, y_train_completo, w_train_completo,
-                                   X_valid, w_valid,
-                                   X_test,
-                                   params, num_boost_round,
-                                   semillas=None,
-                                   guardar_modelos=True,
-                                   nombre_experimento=NOMBRE_EXPERIMENTO):
+def entrenar_ensemble_multisemilla(
+    X_train_inicial,
+    y_train_inicial,
+    w_train_inicial,
+    X_train_completo,
+    y_train_completo,
+    w_train_completo,
+    X_valid,
+    w_valid,
+    X_test,
+    params,
+    num_boost_round,
+    semillas=None,
+    guardar_modelos=True,
+    nombre_experimento=NOMBRE_EXPERIMENTO,
+):
     """
-    Entrena un ensemble de modelos con múltiples semillas.
-    """
-    semillas = semillas or SEMILLAS
+    Entrena / reanuda un ensemble multisemilla **sin fuga de información**:
 
-    probabilidades_abril = []
-    probabilidades_junio = []
+    Para cada semilla:
+      FASE 1 (modelo_valid):
+        - Train con X_train_inicial (MESES_TRAIN + 202104).
+        - Se guarda en disco como ..._seed{seed}_valid.txt
+        - Se usa SOLO para predecir junio (X_valid = 202106)
+
+      FASE 2 (modelo_final):
+        - Train con X_train_completo (MESES_TRAIN + 202104 + 202106).
+        - Se guarda en disco como ..._seed{seed}_final.txt
+        - Se usa SOLO para predecir agosto (X_test = 202108)
+
+    Si el proceso se corta, al relanzar:
+      - Si existe *_valid.txt → NO reentrena FASE 1 para esa seed.
+      - Si existe *_final.txt → NO reentrena FASE 2 para esa seed.
+    """
+
+    semillas = semillas or SEMILLAS_ENSEMBLE
+
+    probabilidades_valid = []
+    probabilidades_test = []
     umbrales_individuales = []
     ganancias_individuales = []
     modelos_finales = []
 
-    logger.info(f"\n{'='*60}")
-    logger.info(f"🌱 ENTRENANDO ENSEMBLE CON {len(semillas)} SEMILLAS")
-    logger.info(f"{'='*60}")
+    os.makedirs(MODELOS_PATH, exist_ok=True)
+
+    logger.info("\n" + "=" * 60)
+    logger.info("🌱 ENTRENANDO / REANUDANDO ENSEMBLE MULTISEMILLA")
+    logger.info(f"🏷️ Experimento: {nombre_experimento}")
+    logger.info(f"🌱 Semillas: {semillas}")
+    logger.info("=" * 60)
 
     for i, seed in enumerate(semillas, 1):
         logger.info(f"\n🌱 Semilla {seed} ({i}/{len(semillas)})")
 
-        # --- FASE 1: Entrenar con datos iniciales y predecir en abril ---
-        model_abril = entrenar_modelo_single_seed(
-            X_train_inicial, y_train_inicial, w_train_inicial,
-            params, num_boost_round, seed
-        )
+        # Rutas para FASE 1 (valid) y FASE 2 (final)
+        fname_valid = f"{nombre_experimento}_seed{seed}_valid.txt"
+        fpath_valid = os.path.join(MODELOS_PATH, fname_valid)
 
-        y_pred_abril = model_abril.predict(X_valid)
-        probabilidades_abril.append(y_pred_abril)
+        fname_final = f"{nombre_experimento}_seed{seed}_final.txt"
+        fpath_final = os.path.join(MODELOS_PATH, fname_final)
 
-        # Calcular umbral y ganancia individual
-        umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_abril, w_valid)
+        # =========================
+        # FASE 1: modelo_valid (hasta abril inclusive)
+        # =========================
+        if os.path.exists(fpath_valid):
+            logger.info(f"🔁 Modelo_valid encontrado. Cargando desde: {fpath_valid}")
+            model_valid = lgb.Booster(model_file=fpath_valid)
+        else:
+            logger.info("⏳ FASE 1: Entrenando modelo_valid (train hasta abril inclusive)...")
+            model_valid = entrenar_modelo_single_seed(
+                X_train_inicial,
+                y_train_inicial,
+                w_train_inicial,
+                params,
+                num_boost_round,
+                seed,
+            )
+            if guardar_modelos:
+                model_valid.save_model(fpath_valid)
+                logger.info(f"💾 Modelo_valid guardado en: {fpath_valid}")
+
+        # Predicción en validación externa (202106) usando SOLO modelo_valid
+        y_pred_valid = model_valid.predict(X_valid)
+        umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_valid, w_valid)
+
+        probabilidades_valid.append(y_pred_valid)
         umbrales_individuales.append(umbral)
         ganancias_individuales.append(ganancia)
 
-        logger.info(f"   📊 Umbral: {umbral:.6f}, N={N_opt}, Ganancia=${ganancia:,.0f}")
-
-        # --- FASE 2: Re-entrenar con datos completos y predecir en junio ---
-        model_final = entrenar_modelo_single_seed(
-            X_train_completo, y_train_completo, w_train_completo,
-            params, num_boost_round, seed
+        logger.info(
+            f"📊 Validación limpia 202106 | Umbral={umbral:.6f} | "
+            f"N={N_opt} | Ganancia=${ganancia:,.0f}"
         )
 
-        y_pred_junio = model_final.predict(X_test)
-        probabilidades_junio.append(y_pred_junio)
+        # =========================
+        # FASE 2: modelo_final (hasta junio inclusive)
+        # =========================
+        if os.path.exists(fpath_final):
+            logger.info(f"🔁 Modelo_final encontrado. Cargando desde: {fpath_final}")
+            model_final = lgb.Booster(model_file=fpath_final)
+        else:
+            logger.info("⏳ FASE 2: Entrenando modelo_final (train hasta junio inclusive)...")
+            model_final = entrenar_modelo_single_seed(
+                X_train_completo,
+                y_train_completo,
+                w_train_completo,
+                params,
+                num_boost_round,
+                seed,
+            )
+            if guardar_modelos:
+                model_final.save_model(fpath_final)
+                logger.info(f"💾 Modelo_final guardado en: {fpath_final}")
+
+        # Predicción en test final (202108) usando SOLO modelo_final
+        y_pred_test = model_final.predict(X_test)
+        probabilidades_test.append(y_pred_test)
         modelos_finales.append(model_final)
 
-        # Guardar modelo final si está habilitado
-        if guardar_modelos:
-            filename = f"{nombre_experimento}_seed{seed}_final.txt"
-            filepath = os.path.join(MODELOS_PATH, filename)
-            model_final.save_model(filepath)
-            logger.info(f"   💾 Modelo guardado: {filepath}")
-
-    logger.info(f"\n{'='*60}")
-    logger.info(f"✅ ENSEMBLE COMPLETADO")
-    logger.info(f"{'='*60}")
+    logger.info("\n" + "=" * 60)
+    logger.info("✅ ENSEMBLE MULTISEMILLA COMPLETADO / REANUDADO")
+    logger.info(f"🏷️ Experimento: {nombre_experimento}")
+    logger.info("=" * 60)
 
     return {
-        "probabilidades_abril": probabilidades_abril,
-        "probabilidades_junio": probabilidades_junio,
+        "probabilidades_valid": probabilidades_valid,
+        "probabilidades_test": probabilidades_test,
         "umbrales_individuales": umbrales_individuales,
         "ganancias_individuales": ganancias_individuales,
-        "modelos_finales": modelos_finales
+        "modelos_finales": modelos_finales,
     }
+
 
 
 def crear_ensemble_predictions(probabilidades_list):

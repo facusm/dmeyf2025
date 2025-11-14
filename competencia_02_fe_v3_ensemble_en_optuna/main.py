@@ -178,24 +178,21 @@ def main():
     # 6️⃣ GENERACIÓN DEL ARCHIVO FINAL USANDO generar_reporte_ensemble
     logger.info("\n📦 Generando submission final del ensemble...")
 
-    # Extraemos el conjunto de test (202108)
-    data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)]
+    # Extraemos el conjunto de test (202108) a partir del dataset original
+    data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)].copy()
 
-    # Creamos máscara para 202108
-    mask_test = data["foto_mes"].isin(MES_TEST_FINAL)
-
-    # Filtrar predicciones SOLO para el test final
-    pred_final = eval_result["prediccion_binaria"][mask_test.values]
-    prob_final = eval_result["probabilidades_test_ensemble"][mask_test.values]
+    # Las probabilidades y predicciones que salen de evaluar_ensemble_y_umbral
+    # ya corresponden EXACTAMENTE a X_test (MES_TEST_FINAL).
+    prob_final = eval_result["probabilidades_test_ensemble"]
+    pred_final = eval_result["prediccion_binaria"]
 
     # ===== VALIDACIÓN DE ALINEACIÓN =====
-    assert len(data_test) == len(pred_final), \
-        f"ERROR: data_test tiene {len(data_test)} filas pero pred_final tiene {len(pred_final)}."
+    assert len(data_test) == len(pred_final) == len(prob_final), (
+        f"ERROR: longitudes inconsistentes. "
+        f"data_test={len(data_test)}, pred_final={len(pred_final)}, prob_final={len(prob_final)}"
+    )
 
-    assert all(data_test.index == data.index[mask_test]), \
-        "ERROR: El orden de data_test NO coincide con el orden de las predicciones."
-
-    logger.info("Validación de alineación correcta → listas finales alineadas 1 a 1")
+    logger.info("✅ Alineación de test y predicciones verificada → 1 a 1 por fila")
 
     # Guardar CSV final y reporte completo del ensemble
     submission_path = generar_reporte_ensemble(
@@ -215,6 +212,7 @@ def main():
     )
 
     logger.info(f"📄 Submission final guardado en: {submission_path}")
+
 
 
     logger.info(f"\n{'=' * 80}")
