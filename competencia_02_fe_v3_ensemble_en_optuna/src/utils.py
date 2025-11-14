@@ -10,7 +10,7 @@ from config.config import (
     GANANCIA_ACIERTO,
     COSTO_ESTIMULO,
     LOGS_PATH,
-    NOMBRE_EXPERIMENTO,  # ⬅️ para taggear outputs por experimento
+    NOMBRE_EXPERIMENTO,
 )
 
 # === CONFIGURACIÓN DE LOGGING === #
@@ -27,6 +27,7 @@ if not logger.handlers:
 def mejor_umbral_probabilidad(y_pred, weights, ganancia_acierto=None, costo_estimulo=None):
     """
     Encuentra el umbral de probabilidad óptimo que maximiza la ganancia.
+    Usa la misma lógica de ganancia que la métrica de Optuna.
     """
     ganancia_acierto = ganancia_acierto or GANANCIA_ACIERTO
     costo_estimulo = costo_estimulo or COSTO_ESTIMULO
@@ -41,7 +42,7 @@ def mejor_umbral_probabilidad(y_pred, weights, ganancia_acierto=None, costo_esti
     y_pred_sorted = y_pred[orden]
     weights_sorted = weights[orden]
 
-    # Ganancia NETA por envío
+    # Ganancia NETA por envío (mismo criterio que en la competencia)
     ganancias = np.where(
         weights_sorted == 1.00002,
         ganancia_acierto - abs(costo_estimulo),
@@ -51,15 +52,18 @@ def mejor_umbral_probabilidad(y_pred, weights, ganancia_acierto=None, costo_esti
     gan_acum = np.cumsum(ganancias)
 
     if len(gan_acum) == 0:
-        return 0, 0, 0, ([], [], [])
+        return 0.0, 0, 0.0, ([], [], [])
 
     # Buscamos el máximo en el top 70% para evitar colas ruidosas
     limite_busqueda = int(len(gan_acum) * 0.7)
+    if limite_busqueda <= 0:
+        limite_busqueda = len(gan_acum)
+
     idx_max = np.argmax(gan_acum[:limite_busqueda])
 
-    ganancia_max = gan_acum[idx_max]
+    ganancia_max = float(gan_acum[idx_max])
     N_optimo = idx_max + 1
-    umbral_optimo = y_pred_sorted[idx_max]
+    umbral_optimo = float(y_pred_sorted[idx_max])
 
     ns = list(range(1, len(gan_acum) + 1))
     umbrales = list(y_pred_sorted)
