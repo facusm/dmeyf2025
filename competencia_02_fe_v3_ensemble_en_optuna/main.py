@@ -181,9 +181,21 @@ def main():
     # Extraemos el conjunto de test (202108)
     data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)]
 
-    # Predicciones ya armadas desde evaluar_ensemble_y_umbral
-    pred_final = eval_result["prediccion_binaria"]
-    prob_final = eval_result["probabilidades_test_ensemble"]
+    # Creamos máscara para 202108
+    mask_test = data["foto_mes"].isin(MES_TEST_FINAL)
+
+    # Filtrar predicciones SOLO para el test final
+    pred_final = eval_result["prediccion_binaria"][mask_test.values]
+    prob_final = eval_result["probabilidades_test_ensemble"][mask_test.values]
+
+    # ===== VALIDACIÓN DE ALINEACIÓN =====
+    assert len(data_test) == len(pred_final), \
+        f"ERROR: data_test tiene {len(data_test)} filas pero pred_final tiene {len(pred_final)}."
+
+    assert all(data_test.index == data.index[mask_test]), \
+        "ERROR: El orden de data_test NO coincide con el orden de las predicciones."
+
+    logger.info("Validación de alineación correcta → listas finales alineadas 1 a 1")
 
     # Guardar CSV final y reporte completo del ensemble
     submission_path = generar_reporte_ensemble(
@@ -203,7 +215,6 @@ def main():
     )
 
     logger.info(f"📄 Submission final guardado en: {submission_path}")
-
 
 
     logger.info(f"\n{'=' * 80}")
