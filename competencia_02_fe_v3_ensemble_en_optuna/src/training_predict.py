@@ -4,7 +4,7 @@ import os
 import numpy as np
 import lightgbm as lgb
 
-from config.config import MODELOS_PATH, SEMILLAS, NOMBRE_EXPERIMENTO
+from config.config import MODELOS_PATH, SEMILLAS_ENSEMBLE, NOMBRE_EXPERIMENTO
 from src.utils import logger, mejor_umbral_probabilidad
 
 
@@ -50,7 +50,7 @@ def entrenar_ensemble_multisemilla(
     La ganancia siempre se evalúa sobre el conjunto de validación externa,
     sin importar si el modelo fue entrenado o cargado.
     """
-    semillas = semillas or SEMILLAS
+    semillas = semillas or SEMILLAS_ENSEMBLE
 
     probabilidades_valid = []
     probabilidades_test = []

@@ -6,12 +6,14 @@ from datetime import datetime
 
 from config.config import (
     PARAMS,
-    SEMILLAS,
+    SEMILLAS_OPTUNA,
+    SEMILLAS_ENSEMBLE,
     SUFIJO_FE,
     MES_TEST_FINAL,
     FE_PATH,
     LOGS_PATH,
     NOMBRE_EXPERIMENTO,
+    EXPERIMENT_DIR
 )
 from src.data_load_preparation import (
     cargar_datos,
@@ -107,8 +109,8 @@ def main():
         X_valid_optuna,
         y_valid_optuna,
         w_valid_optuna,
-        semilleros=SEMILLAS,
-        seed=SEMILLAS[0],
+        semilleros=SEMILLAS_OPTUNA,
+        seed=SEMILLAS_OPTUNA[0],
     )
 
     best_params = study.best_params
@@ -130,7 +132,7 @@ def main():
         X_test,
         params={**best_params, "objective": "binary", "metric": "None"},
         num_boost_round=best_iter,
-        semillas=SEMILLAS,
+        semillas=SEMILLAS_ENSEMBLE,
         guardar_modelos=True,
     )
 
@@ -143,38 +145,65 @@ def main():
         ensemble_result["umbrales_individuales"],
     )
 
-    # 6️⃣ Generación de archivos finales de submission — uno por cada mes de test
-    logger.info("\n📦 Generando submissions por mes de test...")
+    # 5️⃣.1️⃣ Reporte adicional: Ganancia estimada del ensemble
+    gan_ens = eval_result["ganancia_maxima_valid"]
+    N_opt_ens = eval_result["N_en_umbral"]
+    umbral_ens = eval_result["umbral_optimo_ensemble"]
 
-    # Extraemos el conjunto de test que coincide con las predicciones del ensemble
+    logger.info("\n🎯 RESULTADOS DEL ENSEMBLE (VALIDACIÓN EXTERNA 202106)")
+    logger.info(f"   ✨ Ganancia óptima del ensemble: ${gan_ens:,.0f}")
+    logger.info(f"   📮 N óptimo de envíos: {N_opt_ens:,}")
+    logger.info(f"   🔪 Umbral óptimo del ensemble: {umbral_ens:.6f}\n")
+
+    # 5️⃣.2️⃣ Guardado de eval_result en JSON para reproducibilidad
+    import json
+
+    eval_result_path = os.path.join(EXPERIMENT_DIR, "eval_result.json")
+
+    # Convertir objetos no serializables (numpy arrays → listas)
+    eval_result_serializable = {
+        key: (
+            value.tolist() if hasattr(value, "tolist") else value
+        )
+        for key, value in eval_result.items()
+    }
+
+    with open(eval_result_path, "w") as f:
+        json.dump(eval_result_serializable, f, indent=4)
+
+    logger.info(f"💾 eval_result guardado en: {eval_result_path}")
+
+
+
+    # 6️⃣ GENERACIÓN DEL ARCHIVO FINAL USANDO generar_reporte_ensemble
+    logger.info("\n📦 Generando submission final del ensemble...")
+
+    # Extraemos el conjunto de test (202108)
     data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)]
 
-    for mes in MES_TEST_FINAL:
-        logger.info(f"\n📅 Generando submission para mes de test: {mes}")
+    # Predicciones ya armadas desde evaluar_ensemble_y_umbral
+    pred_final = eval_result["prediccion_binaria"]
+    prob_final = eval_result["probabilidades_test_ensemble"]
 
-        # Máscara sobre el subset de test
-        mask_mes = data_test["foto_mes"] == mes
-        test_mes = data_test[mask_mes]
+    # Guardar CSV final y reporte completo del ensemble
+    submission_path = generar_reporte_ensemble(
+        test_data=data_test,
+        prediccion_final_binaria=pred_final,
+        probabilidades_test_ensemble=prob_final,
+        umbrales_individuales=ensemble_result["umbrales_individuales"],
+        umbral_promedio_individual=eval_result["umbral_promedio_individual"],
+        umbral_ensemble=eval_result["umbral_optimo_ensemble"],
+        umbral_aplicado_test=eval_result["umbral_optimo_ensemble"],
+        ganancia_ensemble=eval_result["ganancia_maxima_valid"],
+        N_ensemble=eval_result["N_en_umbral"],
+        semillas=SEMILLAS_ENSEMBLE,
+        N_enviados_final=(pred_final == 1).sum(),
+        nombre_modelo=f"ensemble_lgbm_{MES_TEST_FINAL[0]}",
+        trial_number=study.best_trial.number,
+    )
 
-        # Predicciones y probabilidades correspondientes a ese mes
-        pred_mes = eval_result["prediccion_binaria"][mask_mes.values]
-        prob_mes = eval_result["probabilidades_test_ensemble"][mask_mes.values]
+    logger.info(f"📄 Submission final guardado en: {submission_path}")
 
-        generar_reporte_ensemble(
-            test_data=test_mes,
-            prediccion_final_binaria=pred_mes,
-            probabilidades_test_ensemble=prob_mes,
-            umbrales_individuales=ensemble_result["umbrales_individuales"],
-            umbral_promedio_individual=eval_result["umbral_promedio_individual"],
-            umbral_ensemble=eval_result["umbral_optimo_ensemble"],
-            umbral_aplicado_test=eval_result["umbral_optimo_ensemble"],
-            ganancia_ensemble=eval_result["ganancia_maxima_valid"],
-            N_ensemble=eval_result["N_en_umbral"],
-            semillas=SEMILLAS,
-            N_enviados_final=(pred_mes == 1).sum(),
-            nombre_modelo=f"ensemble_lgbm_{mes}",
-            trial_number=study.best_trial.number,
-        )
 
 
     logger.info(f"\n{'=' * 80}")

@@ -52,9 +52,22 @@ MES_VALID = [202106]
 # Test final (podés correr ambos escenarios separados con el mismo experimento)
 MES_TEST_FINAL = [202108]
 
-# Semillas para ensemble
-SEMILLAS = [
+# Semillas para Optuna
+SEMILLAS_OPTUNA = [
     306491, 336251, 900577, 182009, 182011, 182027
+]
+
+# Semillas para ensemble final
+# (Ejemplo con 50 seeds — podés generar más si querés)
+SEMILLAS_ENSEMBLE = SEMILLAS_OPTUNA + [
+    100003, 100019, 100043, 100067, 100087,
+    200003, 200017, 200029, 200051, 200071,
+    300007, 300023, 300049, 300071, 300101,
+    400003, 400013, 400037, 400057, 400091,
+    500009, 500021, 500047, 500071, 500103,
+    600011, 600031, 600043, 600067, 600101,
+    700003, 700019, 700031, 700061, 700093,
+    800009, 800021, 800043, 800067, 800099
 ]
 
 
