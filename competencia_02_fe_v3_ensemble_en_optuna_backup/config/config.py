@@ -54,7 +54,7 @@ MES_TEST_FINAL = [202108]
 
 # Semillas para Optuna
 SEMILLAS_OPTUNA = [
-    306491, 336251, 900577, 182009, 182011, 182027
+    306491, 336251, 900577, 182009, 182011, 182027, 800089
 ]
 
 # Semillas para ensemble final
