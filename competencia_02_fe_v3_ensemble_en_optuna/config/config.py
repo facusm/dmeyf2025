@@ -102,7 +102,7 @@ def build_experiment_name() -> str:
     ID único y legible del experimento:
     lgbm_{FE}_{US}_{train}_{val}_{vext}_{test}_s{n_seeds}
     """
-    n_seeds = len(SEMILLAS)
+    n_seeds = len(SEMILLAS_ENSEMBLE)
 
     parts = [
         "lgbm",
