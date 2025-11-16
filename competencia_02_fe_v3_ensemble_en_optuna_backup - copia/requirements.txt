@@ -1,0 +1,11 @@
+duckdb-engine
+jupysql
+lightgbm
+pandas
+optuna
+numpy
+matplotlib
+scikit-learn
+seaborn
+duckdb
+pyarrow
