@@ -9,19 +9,18 @@ from datetime import datetime
 BUCKET_PATH_b1 = "/home/sanmartinofacundo/buckets/b1"
 
 LOCAL_DATA_DIR = "/home/sanmartinofacundo/datasets"
-DATASET_CRUDO_PATH = os.path.join(LOCAL_DATA_DIR, "competencia_02_crudo.csv.gz")
-DATASET_TARGETS_CREADOS_PATH = os.path.join(BUCKET_PATH_b1, "competencia_02.csv.gz")
+DATASET_TARGETS_CREADOS_PATH = os.path.join(BUCKET_PATH_b1, "competencia_03.csv.gz")
 
-FILE_BASE = "competencia_02"
-PROJECT_NAME = "competencia02"
+FILE_BASE = "competencia_03"
+PROJECT_NAME = "competencia03"
 
 # ==================================================================================
 # FEATURE ENGINEERING
 # ==================================================================================
 
 # Describí acá la variante de FE (lags, ventanas, reglas, etc.)
-SUFIJO_FE = "fe_v2"
-VERSION = "v2"
+SUFIJO_FE = "fe_v3"
+VERSION = "v3"
 
 FEATURES_ROOT = os.path.join(BUCKET_PATH_b1, "features")
 FEATURES_DIR = os.path.join(FEATURES_ROOT, SUFIJO_FE)
@@ -34,34 +33,49 @@ FE_PATH = os.path.join(FEATURES_DIR, FE_FILENAME)
 # MESES (ACTUALIZADO CON LO QUE DEFINISTE)
 # ==================================================================================
 
-# Entrenamiento base: 201901–202012 | saltando marzo–octubre 2020 (meses con pandemia)
+# Entrenamiento base: 201901–202102
 MESES_TRAIN = [
     201901, 201902, 201903, 201904, 201905, 201906,
-    201907, 201908, 201909, 201910, 201911, 201912,
-    202001, 202002,202011, 202012,
-]
+    201907, 201908, 201909, 201911, 201912,
+    202001, 202002, 202003, 202004, 202005,
+    202007, 202008, 202009, 202010, 202011, 202012,
+    202101, 202102, 202103 
+] # Evaluar sacar algunos meses según los experimentos
 
 # Validación interna (Optuna)
-MES_VAL_OPTUNA = [202101]
+MES_VAL_OPTUNA = [202105]
 
-# Validación externa 
-MES_VALID = [202102]
+# Validación externa (ajuste de umbral / sanity check)
+MES_VALID = [202107]
 
-# Test final 
-MES_TEST_FINAL = [202104, 202106]
+# Test final (podés correr ambos escenarios separados con el mismo experimento)
+MES_TEST_FINAL = [202109]
 
-# Semillas para ensemble
-SEMILLAS = [
-    181459, 306491, 336251, 900577, 901751,
-    182009, 182011, 182027, 182029, 182041,
+# Semillas para Optuna
+SEMILLAS_OPTUNA = [
+    306491, 336251, 900577, 182009, 182011, 182027, 800089
 ]
+
+# Semillas para ensemble final
+
+SEMILLAS_ENSEMBLE = SEMILLAS_OPTUNA + [
+    100003, 100019, 100043, 100049, 100057,
+    200003, 200017, 200023, 200047, 200063,
+    300007, 300023, 300029, 300047, 300053,
+    400009, 400013, 400031, 400039, 400063,
+    500009, 500021, 500029, 500041, 500047,
+    600011, 600023, 600043, 600071, 600077,
+    700001, 700009, 700027, 700051, 700079,
+    800011, 800029, 800057, 800077
+]
+
 
 # ==================================================================================
 # UNDERSAMPLING
 # ==================================================================================
 
 APLICAR_UNDERSAMPLING = True
-RATIO_UNDERSAMPLING = 0.05
+RATIO_UNDERSAMPLING = 0.1 
 
 def _tag_us():
     if (not APLICAR_UNDERSAMPLING) or (RATIO_UNDERSAMPLING >= 0.999):
@@ -87,7 +101,7 @@ def build_experiment_name() -> str:
     ID único y legible del experimento:
     lgbm_{FE}_{US}_{train}_{val}_{vext}_{test}_s{n_seeds}
     """
-    n_seeds = len(SEMILLAS)
+    n_seeds = len(SEMILLAS_OPTUNA)
 
     parts = [
         "lgbm",
@@ -110,7 +124,7 @@ NOMBRE_EXPERIMENTO = build_experiment_name()
 # ESTRUCTURA DE SALIDAS POR EXPERIMENTO
 # ==================================================================================
 
-EXPERIMENTS_ROOT = os.path.join(BUCKET_PATH_b1, "experiments")
+EXPERIMENTS_ROOT = os.path.join(BUCKET_PATH_b1, "competencia_02")
 os.makedirs(EXPERIMENTS_ROOT, exist_ok=True)
 
 EXPERIMENT_DIR = os.path.join(EXPERIMENTS_ROOT, NOMBRE_EXPERIMENTO)
