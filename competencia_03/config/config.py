@@ -34,7 +34,7 @@ FE_PATH = os.path.join(FEATURES_DIR, FE_FILENAME)
 # ==================================================================================
 
 # Entrenamiento base: 201901–202102
-MESES_TRAIN = [
+MESES_TRAIN_OPTUNA = [
     201901, 201902, 201903, 201904, 201905, 201906,
     201907, 201908, 201909, 201911, 201912,
     202001, 202002, 202003, 202004, 202005,
@@ -45,29 +45,37 @@ MESES_TRAIN = [
 # Validación interna (Optuna)
 MES_VAL_OPTUNA = [202105]
 
+MESES_TRAIN_PARA_VAL_EXT = MESES_TRAIN_OPTUNA + [202104] + MES_VAL_OPTUNA
+
 # Validación externa (ajuste de umbral / sanity check)
-MES_VALID = [202107]
+MES_VALID_EXT = [202107]
+
+MESES_TRAIN_COMPLETO_PARA_TEST_FINAL = MESES_TRAIN_PARA_VAL_EXT + [202106] + MES_VALID_EXT
 
 # Test final (podés correr ambos escenarios separados con el mismo experimento)
 MES_TEST_FINAL = [202109]
 
-# Semillas para Optuna
+# Semillas para Optuna 
 SEMILLAS_OPTUNA = [
     306491, 336251, 900577, 182009, 182011, 182027, 800089
 ]
 
-# Semillas para ensemble final
+# Número de repeticiones (BO "repe" estilo APO)
+N_REPE_OPTUNA = 1  
 
+# Semillas para ensemble final: 7 (Optuna) + 93 = 100 en total, todas primas
 SEMILLAS_ENSEMBLE = SEMILLAS_OPTUNA + [
-    100003, 100019, 100043, 100049, 100057,
-    200003, 200017, 200023, 200047, 200063,
-    300007, 300023, 300029, 300047, 300053,
-    400009, 400013, 400031, 400039, 400063,
-    500009, 500021, 500029, 500041, 500047,
-    600011, 600023, 600043, 600071, 600077,
-    700001, 700009, 700027, 700051, 700079,
-    800011, 800029, 800057, 800077
-]
+    100003, 100019, 100043, 100049, 100057, 100069, 100103, 100109, 100129, 100151,
+    100153, 100169, 100183, 100189, 100193, 100207, 100213, 100237, 100267, 100271,
+    100279, 100291, 100297, 100313, 100333, 100343, 100357, 100361, 100363, 100379,
+    100391, 100393, 100403, 100411, 100417, 100447, 100459, 100469, 100483, 100493,
+    100501, 100511, 100517, 100519, 100523, 100537, 100547, 100549, 100559, 100591,
+    100609, 100613, 100621, 100649, 100669, 100673, 100693, 100699, 100703, 100733,
+    100741, 100747, 100769, 100787, 100799, 100801, 100811, 100823, 100829, 100847,
+    100853, 100907, 100913, 100927, 100931, 100937, 100943, 100957, 100981, 100987,
+    100999, 101009, 101021, 101027, 101051, 101063, 101081, 101089, 101107, 101111,
+    101113, 101117, 101119
+] # Poner 100 semillas en total para que coincida con APO_K_SEM * APO_N_APO si se usa APO
 
 
 # ==================================================================================
@@ -83,7 +91,7 @@ def _tag_us():
     return f"us{int(RATIO_UNDERSAMPLING * 100):03d}"
 
 def _tag_train():
-    return f"tr{min(MESES_TRAIN)}-{max(MESES_TRAIN)}"
+    return f"tr{min(MESES_TRAIN_OPTUNA)}-{max(MESES_TRAIN_OPTUNA)}"
 
 def _tag_list(prefix: str, meses: list[int]) -> str:
     if not meses:
@@ -109,7 +117,7 @@ def build_experiment_name() -> str:
         _tag_us(),
         _tag_train(),
         _tag_list("val", MES_VAL_OPTUNA),
-        _tag_list("vext", MES_VALID),
+        _tag_list("vext", MES_VALID_EXT),
         _tag_test(),
         f"s{n_seeds}"  # cantidad de semillas usadas en ensemble
     ]
@@ -118,6 +126,8 @@ def build_experiment_name() -> str:
 
 
 NOMBRE_EXPERIMENTO = build_experiment_name()
+
+
 
 
 # ==================================================================================
@@ -138,6 +148,29 @@ for path in [EXPERIMENT_DIR, DB_PATH, MODELOS_PATH, LOGS_PATH, RESULTADOS_PREDIC
     os.makedirs(path, exist_ok=True)
 
 # ==================================================================================
+# APO (A Prueba Overfiteros) sobre validación externa (p.ej. 202107)
+# ==================================================================================
+
+# Semillerio para APO (validación externa)
+SEMILLAS_APO = SEMILLAS_ENSEMBLE[:100]   # por ej: 100 seeds para APO
+APO_K_SEM = 10                          # 10 seeds por APO
+APO_N_APO = 100                         # 100 repes  →  10×10=100
+# TOTAL semillas usadas en APO: APO_K_SEM * APO_N_APO  (ej: 10 * 10 = 100)
+
+
+# Lista de N candidatos (cantidad de envíos) a evaluar
+APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500]  # adaptalo a tu caso
+
+# Carpeta donde se guardan los modelos entrenados SOLO para validación externa
+MODEL_DIR_VAL_EXT = os.path.join(EXPERIMENT_DIR, "modelos_val_ext")
+
+# Directorio para modelos finales (train completo + test)
+MODEL_DIR_TEST_FINAL = os.path.join(EXPERIMENT_DIR, "modelos_test_final")
+
+# Directorio para resultados de predicción final (csv de envío)
+RESULTADOS_PREDICCION_DIR = os.path.join(EXPERIMENT_DIR, "resultados_prediccion")
+
+# ==================================================================================
 # OPTUNA
 # ==================================================================================
 
@@ -155,16 +188,20 @@ GANANCIA_ACIERTO = 780000
 COSTO_ESTIMULO = -20000
 
 # ==================================================================================
-# PARAMS BASE DEL MODELO
+# PARAMS BASE DEL MODELO DE LIGHTGBM
 # ==================================================================================
 
-PARAMS = {
-    "ganancia_acierto": GANANCIA_ACIERTO,
-    "costo_estimulo": COSTO_ESTIMULO,
-    "n_folds": 5,
-    "num_boost_round": 2000,
-    "early_stopping_rounds": 50,
-    "target": "clase_binaria2",
+LGBM_PARAMS_BASE = {
+    "objective": "binary",
+    "metric": "None",
+    "boosting_type": "gbdt",
+    "first_metric_only": True,
+    "boost_from_average": True,
+    "feature_pre_filter": False,
+    "max_depth": -1,
+    "lambda_l1": 0.0,
+    "num_threads": -1,
+    "verbose": -1,
 }
 
 # ==================================================================================

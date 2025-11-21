@@ -9,11 +9,10 @@ from datetime import datetime
 BUCKET_PATH_b1 = "/home/sanmartinofacundo/buckets/b1"
 
 LOCAL_DATA_DIR = "/home/sanmartinofacundo/datasets"
-DATASET_CRUDO_PATH = os.path.join(LOCAL_DATA_DIR, "competencia_02_crudo.csv.gz")
-DATASET_TARGETS_CREADOS_PATH = os.path.join(BUCKET_PATH_b1, "competencia_02.csv.gz")
+DATASET_TARGETS_CREADOS_PATH = os.path.join(BUCKET_PATH_b1, "competencia_03.csv.gz")
 
-FILE_BASE = "competencia_02"
-PROJECT_NAME = "competencia02"
+FILE_BASE = "competencia_03"
+PROJECT_NAME = "competencia03"
 
 # ==================================================================================
 # FEATURE ENGINEERING
@@ -40,17 +39,17 @@ MESES_TRAIN = [
     201907, 201908, 201909, 201911, 201912,
     202001, 202002, 202003, 202004, 202005,
     202007, 202008, 202009, 202010, 202011, 202012,
-    202101, 202102 
+    202101, 202102, 202103 
 ] # Evaluar sacar algunos meses según los experimentos
 
 # Validación interna (Optuna)
-MES_VAL_OPTUNA = [202104]
+MES_VAL_OPTUNA = [202105]
 
 # Validación externa (ajuste de umbral / sanity check)
-MES_VALID = [202106]
+MES_VALID = [202107]
 
 # Test final (podés correr ambos escenarios separados con el mismo experimento)
-MES_TEST_FINAL = [202108]
+MES_TEST_FINAL = [202109]
 
 # Semillas para Optuna
 SEMILLAS_OPTUNA = [

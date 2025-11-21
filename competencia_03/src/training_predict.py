@@ -4,218 +4,112 @@ import os
 import numpy as np
 import lightgbm as lgb
 
-from config.config import MODELOS_PATH, SEMILLAS_ENSEMBLE, NOMBRE_EXPERIMENTO
-from src.utils import logger, mejor_umbral_probabilidad
+from config.config import MODEL_DIR_TEST_FINAL
+from src.utils import logger
 
 
-def entrenar_modelo_single_seed(X_train, y_train, w_train, params, num_boost_round, seed):
-    """
-    Entrena un modelo LightGBM con una semilla específica.
-    """
-    params_seed = params.copy()
-    params_seed["seed"] = seed
-
-    train_dataset = lgb.Dataset(X_train, label=y_train, weight=w_train)
-
-    model = lgb.train(
-        params_seed,
-        train_dataset,
-        num_boost_round=num_boost_round,
-    )
-
-    logger.info(f"✅ Modelo entrenado con semilla {seed}")
-    return model
-
-
-def entrenar_ensemble_multisemilla(
-    X_train_inicial,
-    y_train_inicial,
-    w_train_inicial,
-    X_train_completo,
-    y_train_completo,
-    w_train_completo,
-    X_valid,
-    w_valid,
+def entrenar_ensemble_test_final(
+    X_train,
+    y_train,
+    w_train,
     X_test,
-    params,
-    num_boost_round,
-    semillas=None,
-    guardar_modelos=True,
-    nombre_experimento=NOMBRE_EXPERIMENTO,
+    params: dict,
+    num_boost_round: int,
+    semillas,
+    N_envios: int,
+    guardar_modelos: bool = True,
+    model_dir: str | None = None,
 ):
     """
-    Entrena un ensemble de modelos con múltiples semillas.
-    Si el proceso se interrumpe, al reanudar verifica si los modelos
-    ya existen en MODELOS_PATH y los carga en lugar de reentrenarlos.
-    La ganancia siempre se evalúa sobre el conjunto de validación externa,
-    sin importar si el modelo fue entrenado o cargado.
+    Entrena/carga un modelo LightGBM por cada seed en `semillas` usando X_train completo,
+    predice sobre X_test, arma el ensemble por promedio y aplica un corte
+    por N_envios (por ejemplo N_opt_APO).
+
+    Comportamiento sobre modelos:
+      - Si el archivo del modelo para una seed EXISTE -> se carga (♻️ reutiliza).
+      - Si NO existe -> se entrena y (si guardar_modelos=True) se guarda en disco.
+
+    Parámetros
+    ----------
+    X_train, y_train, w_train : train completo hasta el mes previo al test (MESES_TRAIN_COMPLETO_PARA_TEST_FINAL)
+    X_test                   : features de MES_TEST_FINAL (sin target)
+    params                   : dict con hiperparámetros finales (LGBM_PARAMS_BASE + best_params)
+    num_boost_round          : best_iter (promedio de Optuna)
+    semillas                 : lista de seeds para el ensemble final (SEMILLAS_ENSEMBLE)
+    N_envios                 : N óptimo obtenido por APO (N_opt_APO)
+    guardar_modelos          : si True, guarda los modelos en disco
+    model_dir                : carpeta donde se guardan los modelos finales
+
+    Devuelve
+    --------
+    dict con:
+      - prob_test_ensemble : np.array de probabilidades promedio en test
+      - pred_test_binaria  : np.array binario (0/1) usando top-N_envios
+      - N_envios_usado     : N efectivo (min(N_envios, len(test)))
+      - semillas           : lista de semillas usadas
     """
-    semillas = semillas or SEMILLAS_ENSEMBLE
+    model_dir = model_dir or MODEL_DIR_TEST_FINAL
+    if guardar_modelos:
+        os.makedirs(model_dir, exist_ok=True)
 
-    probabilidades_valid = []
-    probabilidades_test = []
-    umbrales_individuales = []
-    ganancias_individuales = []
-    modelos_finales = []
+    dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train)
 
-    os.makedirs(MODELOS_PATH, exist_ok=True)
+    preds_test = []
 
-    logger.info(f"\n{'=' * 60}")
-    logger.info("🌱 ENTRENANDO ENSEMBLE MULTISEMILLA (con reanudación automática)")
-    logger.info(f"🏷️ Experimento: {nombre_experimento}")
-    logger.info(f"🌱 Semillas: {semillas}")
-    logger.info(f"{'=' * 60}")
+    for seed in semillas:
+        seed = int(seed)
+        params_seed = params.copy()
+        params_seed["seed"] = seed
 
-    for i, seed in enumerate(semillas, 1):
-        logger.info(f"\n🌱 Semilla {seed} ({i}/{len(semillas)})")
+        model_path = os.path.join(model_dir, f"lgbm_testfinal_seed_{seed}.txt")
 
-        filename = f"{nombre_experimento}_seed{seed}_final.txt"
-        filepath = os.path.join(MODELOS_PATH, filename)
-
-        # --- 🔁 Si el modelo ya existe, lo cargamos directamente ---
-        if os.path.exists(filepath):
-            logger.info(f"🔁 Modelo ya encontrado en disco. Cargando desde: {filepath}")
-            model_final = lgb.Booster(model_file=filepath)
-
-            # Evaluamos SIEMPRE en el conjunto de validación externa (consistencia)
-            y_pred_valid = model_final.predict(X_valid)
-            umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_valid, w_valid)
-
-            y_pred_test = model_final.predict(X_test)
-
-            umbrales_individuales.append(umbral)
-            ganancias_individuales.append(ganancia)
-            probabilidades_valid.append(y_pred_valid)
-            probabilidades_test.append(y_pred_test)
-            modelos_finales.append(model_final)
-
+        if os.path.exists(model_path):
+            # ♻️ Reutilizar modelo ya entrenado
             logger.info(
-                f"✅ Modelo cargado (entrenado previamente). "
-                f"Evaluado sobre validación externa → Umbral={umbral:.6f}, Ganancia=${ganancia:,.0f}"
+                f"♻️ Modelo FINAL test seed={seed} ya existe. Se carga desde: {model_path}"
             )
-            continue  # pasa a la siguiente semilla
+            model = lgb.Booster(model_file=model_path)
+        else:
+            # 🌱 Entrenar modelo nuevo
+            logger.info(f"🌳 Entrenando modelo FINAL test seed={seed}...")
+            model = lgb.train(
+                params_seed,
+                dtrain,
+                num_boost_round=num_boost_round,
+                valid_sets=[],
+                verbose_eval=False,
+            )
 
-        # --- 🚀 Si no existe, entrenamos normalmente ---
-        logger.info("⏳ Entrenando modelo nuevo...")
+            if guardar_modelos:
+                model.save_model(model_path)
+                logger.info(f"💾 Modelo FINAL test guardado en: {model_path}")
 
-        # FASE 1: Entrenar con datos iniciales y evaluar en validación externa
-        model_valid = entrenar_modelo_single_seed(
-            X_train_inicial, y_train_inicial, w_train_inicial, params, num_boost_round, seed
-        )
-        y_pred_valid = model_valid.predict(X_valid)
-        umbral, N_opt, ganancia, _ = mejor_umbral_probabilidad(y_pred_valid, w_valid)
+        # Predicciones en test para esta seed
+        preds_test.append(model.predict(X_test))
 
-        umbrales_individuales.append(umbral)
-        ganancias_individuales.append(ganancia)
-        probabilidades_valid.append(y_pred_valid)
+    # ============================
+    # 🌐 Ensemble (promedio) en test
+    # ============================
+    prob_test_ensemble = np.mean(np.vstack(preds_test), axis=0)
 
-        logger.info(f"📊 Umbral validación (semilla {seed}): {umbral:.6f}, N={N_opt}, Ganancia=${ganancia:,.0f}")
+    # ============================
+    # 🎯 Top-N según N_envios (N_opt_APO)
+    # ============================
+    n_test = prob_test_ensemble.shape[0]
+    N_eff = min(int(N_envios), n_test)
 
-        # FASE 2: Reentrenar con datos completos
-        model_final = entrenar_modelo_single_seed(
-            X_train_completo, y_train_completo, w_train_completo, params, num_boost_round, seed
-        )
-        y_pred_test = model_final.predict(X_test)
-        probabilidades_test.append(y_pred_test)
-        modelos_finales.append(model_final)
+    orden_test = np.argsort(prob_test_ensemble)[::-1]
+    pred_test_binaria = np.zeros(n_test, dtype=int)
+    pred_test_binaria[orden_test[:N_eff]] = 1
 
-        if guardar_modelos:
-            model_final.save_model(filepath)
-            logger.info(f"💾 Modelo final guardado en: {filepath}")
-
-    logger.info(f"\n{'=' * 60}")
-    logger.info("✅ ENSEMBLE MULTISEMILLA COMPLETADO")
-    logger.info(f"🏷️ Experimento: {nombre_experimento}")
-    logger.info(f"{'=' * 60}")
-
-    return {
-        "probabilidades_valid": probabilidades_valid,
-        "probabilidades_test": probabilidades_test,
-        "umbrales_individuales": umbrales_individuales,
-        "ganancias_individuales": ganancias_individuales,
-        "modelos_finales": modelos_finales,
-    }
-
-
-
-def crear_ensemble_predictions(probabilidades_list):
-    """
-    Crea predicciones ensemble promediando probabilidades.
-    """
-    matriz = np.array(probabilidades_list)
-    ensemble = np.mean(matriz, axis=0)
-
-    logger.info(f"📊 Ensemble creado: shape={matriz.shape}")
     logger.info(
-        f"   Min={ensemble.min():.6f}, Max={ensemble.max():.6f}, "
-        f"Mean={ensemble.mean():.6f}"
-    )
-
-    return ensemble
-
-
-def evaluar_ensemble_y_umbral(
-    probabilidades_valid,
-    probabilidades_test,
-    w_valid,
-    umbrales_individuales,
-):
-    """
-    Evalúa el ensemble multisemilla:
-      - Promedia predicciones en validación para encontrar umbral óptimo.
-      - Compara con el promedio de umbrales individuales.
-      - Aplica el umbral óptimo al ensemble en test final.
-    """
-    # Ensemble en validación
-    matriz_valid = np.array(probabilidades_valid)
-    probabilidades_valid_ensemble = np.mean(matriz_valid, axis=0)
-
-    logger.info(f"\n{'=' * 60}")
-    logger.info("🎯 CREANDO ENSEMBLE EN VALIDACIÓN Y OPTIMIZANDO UMBRAL")
-    logger.info(f"{'=' * 60}")
-    logger.info(f"📊 Ensemble validación: shape={matriz_valid.shape}")
-
-    umbral_ensemble, N_ensemble, ganancia_ensemble, curva_ensemble = mejor_umbral_probabilidad(
-        probabilidades_valid_ensemble,
-        w_valid,
-    )
-
-    logger.info(f"✅ UMBRAL ÓPTIMO DEL ENSEMBLE (valid): {umbral_ensemble:.6f}")
-    logger.info(f"   N={N_ensemble}, Ganancia=${ganancia_ensemble:,.0f}")
-
-    # Comparar con umbrales individuales
-    umbral_promedio_individual = np.mean(umbrales_individuales)
-    logger.info(f"   Umbral promedio individual: {umbral_promedio_individual:.6f}")
-    logger.info(f"   Desv. std umbrales:          {np.std(umbrales_individuales):.6f}")
-
-    # Ensemble en test
-    matriz_test = np.array(probabilidades_test)
-    probabilidades_test_ensemble = np.mean(matriz_test, axis=0)
-
-    logger.info(f"\n{'=' * 60}")
-    logger.info("🚀 APLICANDO UMBRAL AL ENSEMBLE EN TEST FINAL")
-    logger.info(f"{'=' * 60}")
-    logger.info(f"📊 Ensemble test final: shape={matriz_test.shape}")
-
-    prediccion_final_binaria = (probabilidades_test_ensemble >= umbral_ensemble).astype(int)
-    N_enviados_final = prediccion_final_binaria.sum()
-
-    logger.info("✅ PREDICCIÓN FINAL CON ENSEMBLE")
-    logger.info(f"   🎯 Umbral usado:          {umbral_ensemble:.6f}")
-    logger.info(f"   📮 Clientes marcados:     {N_enviados_final:,}")
-    logger.info(
-        f"   📊 Proporción positivos: "
-        f"{N_enviados_final / len(prediccion_final_binaria) * 100:.2f}%"
+        f"📦 Ensemble final test: N_envios={N_envios} "
+        f"(efectivo {N_eff}), se etiquetan {N_eff} clientes con Predicted=1."
     )
 
     return {
-        "umbral_optimo_ensemble": umbral_ensemble,
-        "N_en_umbral": N_ensemble,
-        "ganancia_maxima_valid": ganancia_ensemble,
-        "umbral_promedio_individual": umbral_promedio_individual,
-        "probabilidades_valid_ensemble": probabilidades_valid_ensemble,
-        "probabilidades_test_ensemble": probabilidades_test_ensemble,
-        "prediccion_binaria": prediccion_final_binaria,
-        "N_enviados": N_enviados_final,
-        "curva_ganancia": curva_ensemble,
+        "prob_test_ensemble": prob_test_ensemble,
+        "pred_test_binaria": pred_test_binaria,
+        "N_envios_usado": N_eff,
+        "semillas": list(semillas),
     }

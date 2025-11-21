@@ -1,35 +1,53 @@
 # main.py
 
+import pandas as pd
 import os
 import logging
 from datetime import datetime
 
 from config.config import (
-    PARAMS,
     SEMILLAS_OPTUNA,
     SEMILLAS_ENSEMBLE,
     SUFIJO_FE,
-    MES_TEST_FINAL,
     FE_PATH,
     LOGS_PATH,
     NOMBRE_EXPERIMENTO,
-    EXPERIMENT_DIR
+    EXPERIMENT_DIR,
+    LGBM_PARAMS_BASE,
+    MESES_TRAIN_OPTUNA,
+    MES_VAL_OPTUNA,
+    MESES_TRAIN_PARA_VAL_EXT,
+    MES_VALID_EXT,
+    MESES_TRAIN_COMPLETO_PARA_TEST_FINAL,
+    MES_TEST_FINAL,
+    MODEL_DIR_VAL_EXT,
+    MODEL_DIR_TEST_FINAL,
+    RESULTADOS_PREDICCION_DIR,
+    APO_CORTES_ENVIO,
+    SEMILLAS_APO,
+    APO_K_SEM,
+    APO_N_APO,
 )
+
 from src.data_load_preparation import (
     cargar_datos,
     preparar_clases_y_pesos,
-    preparar_train_optuna,
-    preparar_validacion_optuna,
-    preparar_validacion,
-    preparar_test_final,
-    preparar_train_completo,
+    preparar_train_meses,
+    preparar_validacion_meses,
+    preparar_test_final_meses
+    
 )
+
+from src.apo_validacion_externa import (
+    entrenar_modelos_val_externa,
+    seleccionar_N_optimo_APO,
+)
+
 from src.optuna_optimization import ejecutar_optimizacion
 from src.training_predict import (
-    entrenar_ensemble_multisemilla,
-    evaluar_ensemble_y_umbral,
+    entrenar_ensemble_test_final
 )
-from src.resultados_ensemble import generar_reporte_ensemble
+
 from src.utils import logger
 
 
@@ -78,27 +96,23 @@ def main():
     path_input = FE_PATH
     logger.info(f"📥 Cargando dataset FE desde: {path_input}")
     data = cargar_datos(path_input)
-    data = preparar_clases_y_pesos(data)
+    data = preparar_clases_y_pesos(data) # Crea las columnas 'clase_binaria1', 'clase_binaria2' y 'clase_peso' en el dataframe data
 
     # 2️⃣ Armado de splits
     logger.info("🧩 Preparando datasets...")
 
-    X_train_optuna, y_train_optuna, w_train_optuna = preparar_train_optuna(data)
-    X_valid_optuna, y_valid_optuna, w_valid_optuna = preparar_validacion_optuna(data)
-    X_valid, y_valid, w_valid = preparar_validacion(data)
-    X_test, clientes_test = preparar_test_final(data)
+    # Splits de train y validación para Optuna
+    X_train_optuna, y_train_optuna, w_train_optuna = preparar_train_meses(data, MESES_TRAIN_OPTUNA, nombre_split = "Train Optuna")
+    X_valid_optuna, y_valid_optuna, w_valid_optuna = preparar_validacion_meses(data, MES_VAL_OPTUNA, nombre_split = "Val Optuna")
 
-    X_train_inicial, y_train_inicial, w_train_inicial = preparar_train_completo(
-        train_optuna=(X_train_optuna, y_train_optuna, w_train_optuna),
-        valid_optuna=(X_valid_optuna, y_valid_optuna, w_valid_optuna),
-        valid_externa=None,
-    )
+    # Splits de train inicial para validación externa y set de validación externa 
+    X_train_inicial, y_train_inicial, w_train_inicial = preparar_train_meses(data, MESES_TRAIN_PARA_VAL_EXT, nombre_split = "Train Val Ext")
+    X_valid, y_valid, w_valid = preparar_validacion_meses(data, MES_VALID_EXT, nombre_split = "Val Ext")
 
-    X_train_completo, y_train_completo, w_train_completo = preparar_train_completo(
-        train_optuna=(X_train_optuna, y_train_optuna, w_train_optuna),
-        valid_optuna=(X_valid_optuna, y_valid_optuna, w_valid_optuna),
-        valid_externa=(X_valid, y_valid, w_valid),
-    )
+    # Split de train completo para test final + set de test final
+    X_train_completo, y_train_completo, w_train_completo = preparar_train_meses(data, MESES_TRAIN_COMPLETO_PARA_TEST_FINAL, nombre_split = "Train Completo para Test Final")
+    X_test, clientes_test = preparar_test_final_meses(data, MES_TEST_FINAL, nombre_split = f"Test Final {MES_TEST_FINAL[0]}")
+
 
     # 3️⃣ Optimización de hiperparámetros con Optuna
     logger.info("\n🎯 Iniciando optimización con Optuna (validación temporal + multisemilla)...")
@@ -113,97 +127,110 @@ def main():
         seed=SEMILLAS_OPTUNA[0],
     )
 
-    best_params = study.best_params
-    best_iter = study.best_trial.user_attrs.get(
-        "best_iter",
-        PARAMS.get("num_boost_round", 1000),
-    )
+    # Mejor trial encontrado
+    best_trial = study.best_trial
+
+    # Mejor conjunto de hiperparámetros encontrados
+    best_params = best_trial.params
+
+    # Hiperparámetros finales para entrenar modelos definitivos (FIJOS + mejores encontrados)
+    lgbm_params_final = LGBM_PARAMS_BASE.copy()
+    lgbm_params_final.update(best_params)
+    
+    # Iteraciones óptimas (promedio sobre repes/seeds)
+    best_iter = int(best_trial.user_attrs["best_iter"])
+
+    # Información adicional del best_trial
+    N_opt_ensemble = best_trial.user_attrs.get("N_opt_ensemble")
+    umbral_ensemble = best_trial.user_attrs.get("umbral_ensemble")
 
     logger.info(f"✅ Mejor trial #{study.best_trial.number} con ganancia {study.best_value:,.0f}")
-    logger.info(f"   Parámetros óptimos: {best_params}")
+    logger.info(f"📌 Hiperparámetros finales LightGBM: {lgbm_params_final}")
     logger.info(f"   Iteraciones óptimas (promedio): {best_iter}")
 
-    # 4️⃣ Entrenamiento ensemble multisemilla
-    logger.info("\n🌱 Entrenando ensemble multisemilla...")
-    ensemble_result = entrenar_ensemble_multisemilla(
-        X_train_inicial, y_train_inicial, w_train_inicial,
-        X_train_completo, y_train_completo, w_train_completo,
-        X_valid, w_valid,
-        X_test,
-        params={**best_params, "objective": "binary", "metric": "None"},
-        num_boost_round=best_iter,
-        semillas=SEMILLAS_ENSEMBLE,
-        guardar_modelos=True,
-    )
-
-    # 5️⃣ Evaluación del ensemble
-    logger.info("\n📈 Evaluando ensemble y determinando umbral óptimo...")
-    eval_result = evaluar_ensemble_y_umbral(
-        ensemble_result["probabilidades_valid"],
-        ensemble_result["probabilidades_test"],
-        w_valid,
-        ensemble_result["umbrales_individuales"],
-    )
-
-    # 5️⃣.1️⃣ Reporte adicional: Ganancia estimada del ensemble
-    gan_ens = eval_result["ganancia_maxima_valid"]
-    N_opt_ens = eval_result["N_en_umbral"]
-    umbral_ens = eval_result["umbral_optimo_ensemble"]
-
-    logger.info("\n🎯 RESULTADOS DEL ENSEMBLE (VALIDACIÓN EXTERNA 202106)")
-    logger.info(f"   ✨ Ganancia óptima del ensemble: ${gan_ens:,.0f}")
-    logger.info(f"   📮 N óptimo de envíos: {N_opt_ens:,}")
-    logger.info(f"   🔪 Umbral óptimo del ensemble: {umbral_ens:.6f}\n")
-
-    # 5️⃣.2️⃣ Guardado de eval_result en JSON para reproducibilidad
-    import json
-
-    eval_result_path = os.path.join(EXPERIMENT_DIR, "eval_result.json")
-
-    # Convertir objetos no serializables (numpy arrays → listas)
-    eval_result_serializable = {
-        key: (
-            value.tolist() if hasattr(value, "tolist") else value
+    # Logger adicional para ensemble
+    if N_opt_ensemble is not None and umbral_ensemble is not None:
+        logger.info(
+            f"   N óptimo ensemble (valid meseta): {N_opt_ensemble:,} | "
+            f"umbral ensemble: {umbral_ensemble:.6f}"
         )
-        for key, value in eval_result.items()
-    }
 
-    with open(eval_result_path, "w") as f:
-        json.dump(eval_result_serializable, f, indent=4)
-
-    logger.info(f"💾 eval_result guardado en: {eval_result_path}")
-
-
-
-    # 6️⃣ GENERACIÓN DEL ARCHIVO FINAL USANDO generar_reporte_ensemble
-    logger.info("\n📦 Generando submission final del ensemble...")
-
-    # Extraemos el conjunto de test (202108)
-    data_test = data[data["foto_mes"].isin(MES_TEST_FINAL)]
-
-    # Predicciones ya armadas desde evaluar_ensemble_y_umbral
-    pred_final = eval_result["prediccion_binaria"]
-    prob_final = eval_result["probabilidades_test_ensemble"]
-
-    # Guardar CSV final y reporte completo del ensemble
-    submission_path = generar_reporte_ensemble(
-        test_data=data_test,
-        prediccion_final_binaria=pred_final,
-        probabilidades_test_ensemble=prob_final,
-        umbrales_individuales=ensemble_result["umbrales_individuales"],
-        umbral_promedio_individual=eval_result["umbral_promedio_individual"],
-        umbral_ensemble=eval_result["umbral_optimo_ensemble"],
-        umbral_aplicado_test=eval_result["umbral_optimo_ensemble"],
-        ganancia_ensemble=eval_result["ganancia_maxima_valid"],
-        N_ensemble=eval_result["N_en_umbral"],
-        semillas=SEMILLAS_ENSEMBLE,
-        N_enviados_final=(pred_final == 1).sum(),
-        nombre_modelo=f"ensemble_lgbm_{MES_TEST_FINAL[0]}",
-        trial_number=study.best_trial.number,
+    # 4️⃣ Entrenamiento modelos para validación externa (APO sobre 202107)
+    logger.info("\n🌱 Entrenando modelos para validación externa (APO)...")
+    entrenar_modelos_val_externa(
+        X_train_inicial,
+        y_train_inicial,
+        w_train_inicial,
+        params=lgbm_params_final,
+        num_boost_round=best_iter,
+        semillas=SEMILLAS_APO,
+        model_dir=MODEL_DIR_VAL_EXT,
     )
 
-    logger.info(f"📄 Submission final guardado en: {submission_path}")
+    # 5️⃣ Selección de N óptimo vía APO usando 202107 como pseudo-futuro
+    logger.info("\n📊 Seleccionando N óptimo vía APO sobre validación externa...")
+    N_opt_APO, ganancias_prom_cortes, mganancias = seleccionar_N_optimo_APO(
+        X_valid,
+        w_valid,
+        semillas=SEMILLAS_APO,
+        cortes=APO_CORTES_ENVIO,
+        model_dir=MODEL_DIR_VAL_EXT,
+        ksem=APO_K_SEM,
+        n_apo=APO_N_APO,
+    )
 
+    logger.info(f"🎯 N óptimo APO (valid_ext {MES_VALID_EXT[0]}): {N_opt_APO}")
+
+
+    # 6️⃣ Entrenamiento FINAL (train completo) + predicción en MES_TEST_FINAL
+    logger.info("\n🌳 Entrenando ensemble FINAL multisemilla y prediciendo test...")
+
+    ensemble_final = entrenar_ensemble_test_final(
+        X_train=X_train_completo,
+        y_train=y_train_completo,
+        w_train=w_train_completo,
+        X_test=X_test,
+        params=lgbm_params_final,
+        num_boost_round=best_iter,
+        semillas=SEMILLAS_ENSEMBLE,      # acá usás las seeds del ensemble final
+        N_envios=N_opt_APO,              # viene de apo_validacion_externa
+        guardar_modelos=True,
+        model_dir=MODEL_DIR_TEST_FINAL,
+    )
+
+    prob_test_ensemble = ensemble_final["prob_test_ensemble"]
+    pred_test_binaria = ensemble_final["pred_test_binaria"]
+    N_envios_usado = ensemble_final["N_envios_usado"]
+
+    logger.info(
+        f"✅ Ensemble FINAL test listo. N_envios_usado={N_envios_usado} "
+        f"sobre MES_TEST_FINAL={MES_TEST_FINAL}."
+    )
+
+
+    # 7️⃣ Generación del CSV final de envío (solo clientes con Predicted=1, sin header)
+    os.makedirs(RESULTADOS_PREDICCION_DIR, exist_ok=True)
+
+    df_envio = pd.DataFrame(
+        {
+            "numero_de_cliente": clientes_test,
+            "Predicted": pred_test_binaria.astype(int),
+        }
+    )
+
+    path_envio = os.path.join(
+        RESULTADOS_PREDICCION_DIR,
+        f"envio_{NOMBRE_EXPERIMENTO}_N{N_envios_usado}.csv",
+    )
+
+    # Solo clientes con Predicted = 1 y sin header, formato competencia
+    df_envio.loc[df_envio["Predicted"] == 1, ["numero_de_cliente"]].to_csv(
+        path_envio,
+        index=False,
+        header=False,
+    )
+
+    logger.info(f"📄 Archivo de envío generado: {path_envio}")
 
 
     logger.info(f"\n{'=' * 80}")

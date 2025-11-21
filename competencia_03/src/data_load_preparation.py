@@ -5,10 +5,8 @@ import numpy as np
 import duckdb
 
 from config.config import (
-    MESES_TRAIN,
+    MESES_TRAIN_OPTUNA,
     MES_VAL_OPTUNA,
-    MES_VALID,
-    MES_TEST_FINAL,
     COLS_ID,
     ELIMINAR_COLUMNAS_ID,
     APLICAR_UNDERSAMPLING,
@@ -62,18 +60,23 @@ def preparar_clases_y_pesos(data: pd.DataFrame) -> pd.DataFrame:
 
     return data
 
-
-def preparar_train_optuna(
+def preparar_train_meses(
     data: pd.DataFrame,
+    meses: list[int],
     target: str = "clase_binaria2",
     apply_undersampling: bool | None = None,
     ratio: float | None = None,
     seed: int = 42,
+    nombre_split: str = "train",
 ):
     """
-    Prepara datos de entrenamiento para Optuna usando MESES_TRAIN.
-    Aplica undersampling SOLO sobre MESES_TRAIN (train puro), si está activado en config
-    o via parámetros.
+    Prepara datos de entrenamiento a partir de una lista de meses.
+    Aplica undersampling SOLO sobre esos meses, si está activado.
+
+    Sirve tanto para:
+    - Train de Optuna (MESES_TRAIN_OPTUNA)
+    - Train inicial post-Optuna (p.ej. MESES_TRAIN_OPTUNA + 202104 + MES_VAL_OPTUNA)
+    - Train final para test, etc.
     """
     apply_undersampling = (
         apply_undersampling
@@ -82,11 +85,13 @@ def preparar_train_optuna(
     )
     ratio = ratio or RATIO_UNDERSAMPLING
 
-    train_data = data[data["foto_mes"].isin(MESES_TRAIN)].copy()
-    logger.info(f"📊 Train Optuna: {len(train_data):,} registros de meses {MESES_TRAIN}")
+    train_data = data[data["foto_mes"].isin(meses)].copy()
+    logger.info(
+        f"📊 {nombre_split}: {len(train_data):,} registros de meses {sorted(set(meses))}"
+    )
 
     if apply_undersampling and ratio < 1.0:
-        logger.info(f"🔧 Undersampling activo en train Optuna con ratio={ratio:.2f}")
+        logger.info(f"🔧 Undersampling activo en {nombre_split} con ratio={ratio:.2f}")
         train_data = aplicar_undersampling(
             train_data,
             target_col="clase_ternaria",
@@ -94,7 +99,7 @@ def preparar_train_optuna(
             seed=seed,
         )
     else:
-        logger.info("🔧 Sin undersampling en train Optuna")
+        logger.info(f"🔧 Sin undersampling en {nombre_split}")
 
     cols_to_drop = ["clase_ternaria", "clase_peso", "clase_binaria1", "clase_binaria2"]
     if ELIMINAR_COLUMNAS_ID:
@@ -104,17 +109,30 @@ def preparar_train_optuna(
     y_train = train_data[target]
     w_train = train_data["clase_peso"]
 
-    logger.info(f"✅ X_train_optuna: {X_train.shape}, y_train: {y_train.shape}")
+    logger.info(f"✅ {nombre_split}: X={X_train.shape}, y={y_train.shape}")
     return X_train, y_train, w_train
 
 
-def preparar_validacion_optuna(data: pd.DataFrame, target: str = "clase_binaria2"):
+def preparar_validacion_meses(
+    data: pd.DataFrame,
+    meses: list[int],
+    target: str = "clase_binaria2",
+    nombre_split: str = "Validación",
+):
     """
-    Prepara datos de validación interna para Optuna (MES_VAL_OPTUNA).
+    Prepara datos de validación a partir de una lista de meses.
     SIN undersampling: refleja distribución real.
+
+    Se puede usar para:
+    - Validación interna (Optuna) -> MES_VAL_OPTUNA
+    - Validación externa -> MES_VALID_EXT
+    - O cualquier otro conjunto de meses que quieras evaluar.
     """
-    valid_data = data[data["foto_mes"].isin(MES_VAL_OPTUNA)].copy()
-    logger.info(f"📊 Validación Optuna: {len(valid_data):,} registros del mes {MES_VAL_OPTUNA}")
+    valid_data = data[data["foto_mes"].isin(meses)].copy()
+
+    logger.info(
+        f"📊 {nombre_split}: {len(valid_data):,} registros de meses {sorted(set(meses))}"
+    )
 
     cols_to_drop = ["clase_ternaria", "clase_peso", "clase_binaria1", "clase_binaria2"]
     if ELIMINAR_COLUMNAS_ID:
@@ -124,76 +142,40 @@ def preparar_validacion_optuna(data: pd.DataFrame, target: str = "clase_binaria2
     y_valid = valid_data[target]
     w_valid = valid_data["clase_peso"]
 
-    logger.info(f"✅ X_valid_optuna: {X_valid.shape}")
+    logger.info(f"✅ {nombre_split}: X={X_valid.shape}")
     return X_valid, y_valid, w_valid
 
 
-def preparar_validacion(data: pd.DataFrame, target: str = "clase_binaria2"):
+
+def preparar_test_final_meses(
+    data: pd.DataFrame,
+    meses: list[int],
+    nombre_split: str = "Test final",
+):
     """
-    Prepara datos de validación externa (MES_VALID).
-    Se usa para ajustar umbral / evaluar generalización.
+    Prepara datos de test (sin target) a partir de una lista de meses.
+
+    - NO hace undersampling.
+    - Devuelve:
+        X_test: matriz de features
+        numero_de_cliente: np.array con los IDs de cliente
     """
-    valid_data = data[data["foto_mes"].isin(MES_VALID)].copy()
-    logger.info(f"📊 Validación externa: {len(valid_data):,} registros del mes {MES_VALID}")
+    test_data = data[data["foto_mes"].isin(meses)].copy()
+
+    logger.info(
+        f"📊 {nombre_split}: {len(test_data):,} registros de meses {sorted(set(meses))}"
+    )
 
     cols_to_drop = ["clase_ternaria", "clase_peso", "clase_binaria1", "clase_binaria2"]
     if ELIMINAR_COLUMNAS_ID:
         cols_to_drop += COLS_ID
 
-    X_valid = valid_data.drop(columns=cols_to_drop, errors="ignore")
-    y_valid = valid_data[target]
-    w_valid = valid_data["clase_peso"]
-
-    logger.info(f"✅ X_valid_ext: {X_valid.shape}")
-    return X_valid, y_valid, w_valid
-
-
-def preparar_test_final(data: pd.DataFrame):
-    """
-    Prepara datos de test final (MES_TEST_FINAL).
-    """
-    test_data = data[data["foto_mes"].isin(MES_TEST_FINAL)].copy()
-    logger.info(f"📊 Test final: {len(test_data):,} registros de meses {MES_TEST_FINAL}")
-
-    cols_to_drop = ["clase_ternaria", "clase_peso", "clase_binaria1", "clase_binaria2"]
-    if ELIMINAR_COLUMNAS_ID:
-        cols_to_drop += COLS_ID
-
+    # Ojo: drop se hace sobre una copia, no toca test_data
     X_test = test_data.drop(columns=cols_to_drop, errors="ignore")
     numero_de_cliente = test_data["numero_de_cliente"].values
 
-    logger.info(f"✅ X_test: {X_test.shape}")
+    logger.info(f"✅ {nombre_split}: X={X_test.shape}")
     return X_test, numero_de_cliente
 
 
-def preparar_train_completo(
-    train_optuna,
-    valid_optuna=None,
-    valid_externa=None,
-):
-    """
-    Arma un train completo concatenando:
-    - train_optuna (ya undersampleado, MESES_TRAIN)
-    - valid_optuna (MES_VAL_OPTUNA, sin undersampling)
-    - valid_externa (MES_VALID, sin undersampling)
-    """
-    X_parts = [train_optuna[0]]
-    y_parts = [train_optuna[1]]
-    w_parts = [train_optuna[2]]
 
-    if valid_optuna is not None:
-        X_parts.append(valid_optuna[0])
-        y_parts.append(valid_optuna[1])
-        w_parts.append(valid_optuna[2])
-
-    if valid_externa is not None:
-        X_parts.append(valid_externa[0])
-        y_parts.append(valid_externa[1])
-        w_parts.append(valid_externa[2])
-
-    X_train_completo = pd.concat(X_parts, ignore_index=True)
-    y_train_completo = pd.concat(y_parts, ignore_index=True)
-    w_train_completo = pd.concat(w_parts, ignore_index=True)
-
-    logger.info(f"✅ X_train_completo: {X_train_completo.shape}")
-    return X_train_completo, y_train_completo, w_train_completo
