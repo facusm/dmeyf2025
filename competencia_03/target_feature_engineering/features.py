@@ -3,7 +3,15 @@ import duckdb
 import logging
 import numpy as np
 
-logger = logging.getLogger("__name__")
+logger = logging.getLogger(__name__)
+
+
+def _qident(col: str) -> str:
+    """
+    Quotea un identificador SQL de forma segura para DuckDB: "col".
+    Si el nombre tuviera comillas dobles, las escapa.
+    """
+    return f'"{col.replace(chr(34), chr(34)*2)}"'
 
 
 def pisar_con_mes_anterior_duckdb(
@@ -30,18 +38,16 @@ def pisar_con_mes_anterior_duckdb(
         return df
 
     meses_anomalos = [int(m) for m in meses_anomalos]
-
     slim = df[[id_col, mes_col, variable]].copy()
 
-    con = duckdb.connect()
+    con = duckdb.connect(database=":memory:")
     try:
         con.register("t_in", slim)
         con.register("meses_bad", pd.DataFrame({mes_col: meses_anomalos}))
 
-        # Citar identificadores por si los nombres tienen caracteres especiales
-        q_id = f'"{id_col}"'
-        q_mes = f'"{mes_col}"'
-        q_var = f'"{variable}"'
+        q_id = _qident(id_col)
+        q_mes = _qident(mes_col)
+        q_var = _qident(variable)
 
         query = f"""
         WITH base AS (
@@ -54,10 +60,10 @@ def pisar_con_mes_anterior_duckdb(
         mark AS (
             SELECT
                 b.*,
-                (m.{mes_col} IS NOT NULL) AS is_bad
+                (m.{q_mes} IS NOT NULL) AS is_bad
             FROM base b
             LEFT JOIN meses_bad m
-              ON b.t_ = CAST(m.{mes_col} AS BIGINT)
+              ON b.t_ = CAST(m.{q_mes} AS BIGINT)
         ),
         fuente AS (
             SELECT
@@ -67,7 +73,10 @@ def pisar_con_mes_anterior_duckdb(
         ),
         w AS (
             SELECT *,
-                MAX_BY(v_fuente, t_) OVER (
+                MAX_BY(
+                    v_fuente,
+                    CASE WHEN is_bad THEN -1 ELSE t_ END
+                ) OVER (
                     PARTITION BY id_
                     ORDER BY t_
                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
@@ -91,7 +100,6 @@ def pisar_con_mes_anterior_duckdb(
     finally:
         con.close()
 
-    # Merge con el df original
     out = df.merge(
         corr[[id_col, mes_col, "is_bad", "v_orig", "v_corr"]],
         on=[id_col, mes_col],
@@ -100,28 +108,108 @@ def pisar_con_mes_anterior_duckdb(
 
     mask_bad = out["is_bad"] == True
 
-    # Flag: 1 si el mes es anómalo y el valor se cambió (o no había previo y queda NaN)
     flag_col = f"{variable}_locf"
     was_changed = mask_bad & (
         (out["v_corr"].notna() & (out["v_corr"] != out["v_orig"])) | (out["v_corr"].isna())
     )
     out[flag_col] = was_changed.astype(int)
 
-    # Aplicar corrección (cuando hay previo válido)
     out.loc[mask_bad & out["v_corr"].notna(), variable] = out.loc[mask_bad & out["v_corr"].notna(), "v_corr"]
-
-    # Sin previo válido -> NaN explícito
     out.loc[mask_bad & out["v_corr"].isna(), variable] = np.nan
 
-    # Limpiar auxiliares
     out.drop(columns=["is_bad", "v_orig", "v_corr"], inplace=True)
 
     return out
 
 
+def agregar_drift_features_monetarias(
+    df: pd.DataFrame,
+    columnas_monetarias: list[str],
+    id_col: str = "numero_de_cliente",
+    mes_col: str = "foto_mes",
+) -> pd.DataFrame:
+    """
+    Para cada variable monetaria v:
+      - v_rz_mes: robust z-score por mes sobre signed-log1p(v) usando mediana e IQR (Q75-Q25)
+
+    Importante:
+      - Si v es NULL -> v_rz_mes queda NULL (preserva missingness)
+      - Si IQR (q75-q25) es 0 o NULL -> v_rz_mes cae a 0 SOLO si v no es NULL
+    """
+    if not columnas_monetarias:
+        return df
+
+    cols = [c for c in columnas_monetarias if c in df.columns]
+    if not cols:
+        return df
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.register("df", df)
+
+        slog_exprs = []
+        for v in cols:
+            qv = _qident(v)
+            slog_exprs.append(
+                f"""
+                CASE
+                  WHEN {qv} IS NULL THEN NULL
+                  WHEN {qv} >= 0 THEN log(1 + {qv})
+                  ELSE -log(1 + abs({qv}))
+                END AS "{v}_slog1p"
+                """
+            )
+
+        stats_exprs = []
+        for v in cols:
+            stats_exprs.append(f'approx_quantile("{v}_slog1p", 0.50) AS "{v}_med"')
+            stats_exprs.append(f'approx_quantile("{v}_slog1p", 0.25) AS "{v}_q25"')
+            stats_exprs.append(f'approx_quantile("{v}_slog1p", 0.75) AS "{v}_q75"')
+
+        rz_exprs = []
+        for v in cols:
+            rz_exprs.append(
+                f"""
+                CASE
+                  WHEN "{v}" IS NULL THEN NULL
+                  ELSE COALESCE(
+                    ("{v}_slog1p" - "{v}_med") / NULLIF(("{v}_q75" - "{v}_q25"), 0),
+                    0
+                  )
+                END AS "{v}_rz_mes"
+                """
+            )
+
+        query = f"""
+        WITH t1 AS (
+          SELECT
+            *,
+            {", ".join(slog_exprs)}
+          FROM df
+        ),
+        stats AS (
+          SELECT
+            "{mes_col}",
+            {", ".join(stats_exprs)}
+          FROM t1
+          GROUP BY "{mes_col}"
+        )
+        SELECT
+          t1.* EXCLUDE ({", ".join([f'"{v}_slog1p"' for v in cols])}),
+          {", ".join(rz_exprs)}
+        FROM t1
+        JOIN stats USING("{mes_col}")
+        """
+
+        return con.execute(query).df()
+    finally:
+        con.close()
+
+
 def feature_engineering_lag(df: pd.DataFrame, columnas: list[str], cant_lag: int = 1) -> pd.DataFrame:
     """
     Genera variables de lag para los atributos especificados utilizando SQL.
+    - Quotea columnas para soportar mayúsculas (Master_*, Visa_*) y nombres raros.
     """
     logger.info(f"Realizando feature engineering con {cant_lag} lags para {len(columnas) if columnas else 0} atributos")
 
@@ -131,51 +219,71 @@ def feature_engineering_lag(df: pd.DataFrame, columnas: list[str], cant_lag: int
 
     sql = "SELECT *"
     for attr in columnas:
-        if attr in df.columns:
-            for i in range(1, cant_lag + 1):
-                col_name = f"{attr}_lag_{i}"
-                if col_name not in df.columns:
-                    sql += f", lag({attr}, {i}) OVER (PARTITION BY numero_de_cliente ORDER BY foto_mes) AS {col_name}"
-                else:
-                    logger.warning(f"La columna {col_name} ya existe, no se vuelve a generar")
+        if attr not in df.columns:
+            logger.warning(f"[lag] La columna {attr} no existe, se omite")
+            continue
+
+        q_attr = _qident(attr)
+        for i in range(1, cant_lag + 1):
+            col_name = f"{attr}_lag_{i}"
+            if col_name in df.columns:
+                logger.warning(f"[lag] La columna {col_name} ya existe, no se vuelve a generar")
+                continue
+
+            sql += (
+                f", lag({q_attr}, {i}) OVER ("
+                f"PARTITION BY {_qident('numero_de_cliente')} "
+                f"ORDER BY {_qident('foto_mes')}) AS {_qident(col_name)}"
+            )
 
     sql += " FROM df"
 
     con = duckdb.connect(database=":memory:")
     try:
         con.register("df", df)
-        df = con.execute(sql).df()
+        df_out = con.execute(sql).df()
     finally:
         con.close()
 
-    logger.info(f"Feature engineering completado. DataFrame resultante con {df.shape[1]} columnas")
-    return df
+    logger.info(f"Feature engineering lag completado. DataFrame resultante con {df_out.shape[1]} columnas")
+    return df_out
 
 
 def feature_engineering_deltas(df: pd.DataFrame, columnas: list[str], cant_lag: int = 1) -> pd.DataFrame:
     """
     Genera columnas de delta en SQL: valor actual menos lag correspondiente.
     Mantiene NULL si no hay información suficiente.
+    - Quotea columnas para soportar mayúsculas.
     """
-    logger.info(f"Generando deltas (SQL) para {len(columnas)} columnas con {cant_lag} lags")
+    logger.info(f"Generando deltas (SQL) para {len(columnas) if columnas else 0} columnas con {cant_lag} lags")
+
+    if not columnas:
+        logger.warning("No se especificaron atributos para generar deltas")
+        return df
 
     sql = "SELECT *"
-
     for attr in columnas:
+        if attr not in df.columns:
+            logger.warning(f"[delta] La columna {attr} no existe, se omite")
+            continue
+
+        q_attr = _qident(attr)
         for i in range(1, cant_lag + 1):
             lag_col = f"{attr}_lag_{i}"
             delta_col = f"{attr}_delta_{i}"
 
-            if lag_col in df.columns and delta_col not in df.columns:
-                sql += f", {attr} - {lag_col} AS {delta_col}"
-            elif delta_col in df.columns:
-                logger.warning(f"{delta_col} ya existe, no se genera nuevamente")
-            else:
-                logger.warning(f"{lag_col} no existe, no se puede generar {delta_col}")
+            if lag_col not in df.columns:
+                logger.warning(f"[delta] Falta {lag_col}, no se puede generar {delta_col}")
+                continue
+            if delta_col in df.columns:
+                logger.warning(f"[delta] {delta_col} ya existe, no se genera nuevamente")
+                continue
+
+            sql += f", ({q_attr} - {_qident(lag_col)}) AS {_qident(delta_col)}"
 
     sql += " FROM df"
 
-    con = duckdb.connect(":memory:")
+    con = duckdb.connect(database=":memory:")
     try:
         con.register("df", df)
         df_out = con.execute(sql).df()
@@ -198,15 +306,21 @@ def feature_engineering_medias_moviles(df: pd.DataFrame, columnas: list[str], wi
 
     sql = "SELECT *"
     for attr in columnas:
+        if attr not in df.columns:
+            logger.warning(f"[ma] La columna {attr} no existe, se omite")
+            continue
+
         ma_col_name = f"{attr}_ma_{window_size}"
         if ma_col_name not in df.columns:
             sql += (
                 f', CASE '
-                f'WHEN COUNT("{attr}") OVER (PARTITION BY numero_de_cliente ORDER BY foto_mes '
+                f'WHEN COUNT({_qident(attr)}) OVER (PARTITION BY {_qident("numero_de_cliente")} '
+                f'ORDER BY {_qident("foto_mes")} '
                 f'ROWS BETWEEN {window_size-1} PRECEDING AND CURRENT ROW) = {window_size} '
-                f'THEN AVG("{attr}") OVER (PARTITION BY numero_de_cliente ORDER BY foto_mes '
+                f'THEN AVG({_qident(attr)}) OVER (PARTITION BY {_qident("numero_de_cliente")} '
+                f'ORDER BY {_qident("foto_mes")} '
                 f'ROWS BETWEEN {window_size-1} PRECEDING AND CURRENT ROW) '
-                f'ELSE NULL END AS "{ma_col_name}"'
+                f'ELSE NULL END AS {_qident(ma_col_name)}'
             )
         else:
             logger.warning(f"{ma_col_name} ya existe, no se vuelve a generar")
@@ -224,79 +338,58 @@ def feature_engineering_medias_moviles(df: pd.DataFrame, columnas: list[str], wi
     return df_out
 
 
-def feature_engineering_cum_sum(df: pd.DataFrame, columnas: list[str]) -> pd.DataFrame:
+def feature_engineering_cum_sum(
+    df: pd.DataFrame,
+    columnas: list[str],
+    window_size: int | None = None,   # ej: 6
+    strict: bool = False,             # si True, requiere ventana completa
+) -> pd.DataFrame:
     """
-    Genera columnas de suma acumulada por cliente para los atributos indicados (solo hacia atrás).
+    Genera columnas de suma acumulada por cliente (solo hacia atrás).
+
+    - window_size=None: histórico completo (UNBOUNDED PRECEDING)
+    - window_size=6: últimos 6 registros (5 PRECEDING + current)
+    - strict=True: si no hay 6 filas previas+actual, deja NULL
     """
     if not columnas:
         logger.warning("No se especificaron atributos para cumsum")
         return df
 
-    sql = "SELECT *"
-    for attr in columnas:
-        if attr in df.columns:
-            colname = f"{attr}_cumsum"
-            if colname not in df.columns:
-                sql += (
-                    f", SUM(COALESCE({attr}, 0)) OVER ("
-                    f"  PARTITION BY numero_de_cliente "
-                    f"  ORDER BY foto_mes "
-                    f"  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
-                    f") AS {colname}"
-                )
-            else:
-                logger.warning(f"{colname} ya existe, no se vuelve a generar")
-
-    sql += " FROM df"
-
-    con = duckdb.connect(database=":memory:")
-    try:
-        con.register("df", df)
-        df = con.execute(sql).df()
-    finally:
-        con.close()
-
-    logger.info(f"Feature engineering cumsum completado. DataFrame resultante con {df.shape[1]} columnas")
-    return df
-
-
-def feature_engineering_min_max(df: pd.DataFrame, columnas: list[str]) -> pd.DataFrame:
-    """
-    Genera min/max históricos por cliente HASTA CADA MES (sin mirar el futuro).
-    """
-    logger.info(f"Generando min y max históricos (sin fuga) para {len(columnas) if columnas else 0} atributos")
-
-    if not columnas:
-        logger.warning("No se especificaron atributos para generar min y max")
-        return df
+    frame = (
+        "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+        if window_size is None
+        else f"ROWS BETWEEN {window_size - 1} PRECEDING AND CURRENT ROW"
+    )
 
     sql = "SELECT *"
-
     for attr in columnas:
         if attr not in df.columns:
-            logger.warning(f"La columna {attr} no existe en el DataFrame, se omite en min/max")
+            logger.warning(f"[cumsum] La columna {attr} no existe, se omite")
             continue
 
-        col_min = f"{attr}_min_hist"
-        col_max = f"{attr}_max_hist"
+        colname = f"{attr}_cumsum" if window_size is None else f"{attr}_cumsum_{window_size}"
+        if colname in df.columns:
+            logger.warning(f"{colname} ya existe, no se vuelve a generar")
+            continue
 
-        if col_min not in df.columns:
-            sql += (
-                f", MIN({attr}) OVER ("
-                f"    PARTITION BY numero_de_cliente "
-                f"    ORDER BY foto_mes "
-                f"    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
-                f") AS {col_min}"
-            )
+        base_sum = (
+            f'SUM(COALESCE({_qident(attr)}, 0)) OVER ('
+            f'  PARTITION BY {_qident("numero_de_cliente")} '
+            f'  ORDER BY {_qident("foto_mes")} '
+            f'  {frame}'
+            f')'
+        )
 
-        if col_max not in df.columns:
+        if strict and window_size is not None:
             sql += (
-                f", MAX({attr}) OVER ("
-                f"    PARTITION BY numero_de_cliente "
-                f"    ORDER BY foto_mes "
-                f"    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
-                f") AS {col_max}"
+                f', CASE WHEN COUNT(1) OVER ('
+                f'  PARTITION BY {_qident("numero_de_cliente")} '
+                f'  ORDER BY {_qident("foto_mes")} '
+                f'  {frame}'
+                f') = {window_size} THEN {base_sum} ELSE NULL END AS {_qident(colname)}'
             )
+        else:
+            sql += f', {base_sum} AS {_qident(colname)}'
 
     sql += " FROM df"
 
@@ -307,7 +400,91 @@ def feature_engineering_min_max(df: pd.DataFrame, columnas: list[str]) -> pd.Dat
     finally:
         con.close()
 
-    logger.info(f"Min/max históricos generados. DataFrame resultante con {df_out.shape[1]} columnas")
+    logger.info(f"Feature engineering cumsum completado. DataFrame resultante con {df_out.shape[1]} columnas")
+    return df_out
+
+
+def feature_engineering_min_max(
+    df: pd.DataFrame,
+    columnas: list[str],
+    window_size: int | None = None,   # ej: 6
+    strict: bool = False,
+) -> pd.DataFrame:
+    """
+    Genera min/max por cliente HASTA CADA MES (sin mirar el futuro).
+
+    - window_size=None: min/max histórico
+    - window_size=6: min/max de los últimos 6 registros
+    - strict=True: si no hay 6 filas en ventana, deja NULL
+    """
+    logger.info(
+        f"Generando min/max {'históricos' if window_size is None else f'window {window_size}'} "
+        f"para {len(columnas) if columnas else 0} atributos"
+    )
+
+    if not columnas:
+        logger.warning("No se especificaron atributos para generar min y max")
+        return df
+
+    frame = (
+        "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+        if window_size is None
+        else f"ROWS BETWEEN {window_size - 1} PRECEDING AND CURRENT ROW"
+    )
+
+    sql = "SELECT *"
+    for attr in columnas:
+        if attr not in df.columns:
+            logger.warning(f"[minmax] La columna {attr} no existe en el DataFrame, se omite")
+            continue
+
+        suf = "hist" if window_size is None else str(window_size)
+        col_min = f"{attr}_min_{suf}"
+        col_max = f"{attr}_max_{suf}"
+
+        min_expr = (
+            f'MIN({_qident(attr)}) OVER ('
+            f'  PARTITION BY {_qident("numero_de_cliente")} '
+            f'  ORDER BY {_qident("foto_mes")} '
+            f'  {frame}'
+            f')'
+        )
+        max_expr = (
+            f'MAX({_qident(attr)}) OVER ('
+            f'  PARTITION BY {_qident("numero_de_cliente")} '
+            f'  ORDER BY {_qident("foto_mes")} '
+            f'  {frame}'
+            f')'
+        )
+
+        if strict and window_size is not None:
+            cnt_expr = (
+                f'COUNT(1) OVER ('
+                f'  PARTITION BY {_qident("numero_de_cliente")} '
+                f'  ORDER BY {_qident("foto_mes")} '
+                f'  {frame}'
+                f')'
+            )
+            if col_min not in df.columns:
+                sql += f', CASE WHEN {cnt_expr} = {window_size} THEN {min_expr} ELSE NULL END AS {_qident(col_min)}'
+            if col_max not in df.columns:
+                sql += f', CASE WHEN {cnt_expr} = {window_size} THEN {max_expr} ELSE NULL END AS {_qident(col_max)}'
+        else:
+            if col_min not in df.columns:
+                sql += f', {min_expr} AS {_qident(col_min)}'
+            if col_max not in df.columns:
+                sql += f', {max_expr} AS {_qident(col_max)}'
+
+    sql += " FROM df"
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.register("df", df)
+        df_out = con.execute(sql).df()
+    finally:
+        con.close()
+
+    logger.info(f"Min/max generados. DataFrame resultante con {df_out.shape[1]} columnas")
     return df_out
 
 
@@ -315,24 +492,27 @@ def feature_engineering_ratios(df: pd.DataFrame, ratio_pairs: list[tuple[str, st
     """
     Genera columnas de ratios entre pares válidos de columnas.
     Maneja NULL y división por cero.
+    - Quotea columnas para soportar mayúsculas.
     """
     if not ratio_pairs:
         logger.warning("No se especificaron pares de columnas para generar ratios")
         return df
 
     sql = "SELECT *"
-
     for numerador, denominador in ratio_pairs:
-        ratio_col = f"{numerador}_over_{denominador}"
+        if numerador not in df.columns or denominador not in df.columns:
+            logger.warning(f"[ratio] Columnas no encontradas: {numerador} o {denominador}, se omite")
+            continue
 
-        if numerador in df.columns and denominador in df.columns:
-            if ratio_col not in df.columns:
-                # Forzar división flotante y evitar división por cero
-                sql += f", (1.0 * {numerador}) / NULLIF({denominador}, 0) AS {ratio_col}"
-            else:
-                logger.warning(f"{ratio_col} ya existe, no se vuelve a generar")
-        else:
-            logger.warning(f"Columnas no encontradas: {numerador} o {denominador}, se omite el ratio {ratio_col}")
+        ratio_col = f"{numerador}_over_{denominador}"
+        if ratio_col in df.columns:
+            logger.warning(f"[ratio] {ratio_col} ya existe, no se vuelve a generar")
+            continue
+
+        q_num = _qident(numerador)
+        q_den = _qident(denominador)
+        q_ratio = _qident(ratio_col)
+        sql += f", (1.0 * {q_num}) / NULLIF({q_den}, 0) AS {q_ratio}"
 
     sql += " FROM df"
 
@@ -360,15 +540,21 @@ def feature_engineering_medias_moviles_lag(df: pd.DataFrame, columnas: list[str]
 
     sql = "SELECT *"
     for attr in columnas:
+        if attr not in df.columns:
+            logger.warning(f"[ma_lag] La columna {attr} no existe, se omite")
+            continue
+
         ma_col_name = f"{attr}_ma_lag_{window_size}"
         if ma_col_name not in df.columns:
             sql += (
                 f', CASE '
-                f'WHEN COUNT("{attr}") OVER (PARTITION BY numero_de_cliente ORDER BY foto_mes '
+                f'WHEN COUNT({_qident(attr)}) OVER (PARTITION BY {_qident("numero_de_cliente")} '
+                f'ORDER BY {_qident("foto_mes")} '
                 f'ROWS BETWEEN {window_size} PRECEDING AND 1 PRECEDING) = {window_size} '
-                f'THEN AVG("{attr}") OVER (PARTITION BY numero_de_cliente ORDER BY foto_mes '
+                f'THEN AVG({_qident(attr)}) OVER (PARTITION BY {_qident("numero_de_cliente")} '
+                f'ORDER BY {_qident("foto_mes")} '
                 f'ROWS BETWEEN {window_size} PRECEDING AND 1 PRECEDING) '
-                f'ELSE NULL END AS "{ma_col_name}"'
+                f'ELSE NULL END AS {_qident(ma_col_name)}'
             )
         else:
             logger.warning(f"{ma_col_name} ya existe, no se vuelve a generar")

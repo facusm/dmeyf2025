@@ -19,8 +19,8 @@ PROJECT_NAME = "competencia03"
 # ==================================================================================
 
 # Describí acá la variante de FE (lags, ventanas, reglas, etc.)
-SUFIJO_FE = "fe_v3"
-VERSION = "v3"
+SUFIJO_FE = "fe_v4"
+VERSION = "v4"
 
 FEATURES_ROOT = os.path.join(BUCKET_PATH_b1, "features")
 FEATURES_DIR = os.path.join(FEATURES_ROOT, SUFIJO_FE)

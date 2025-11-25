@@ -1,4 +1,4 @@
-# run_fe.py  (versión conservadora)
+# run_fe.py  (conservadora + drift correction para pesos + cumsum/minmax ventana 6)
 import pandas as pd
 import os
 import datetime
@@ -6,9 +6,9 @@ import logging
 import time
 import duckdb
 
-from src.data_load_preparation import cargar_datos
 from .features import (
     pisar_con_mes_anterior_duckdb,
+    agregar_drift_features_monetarias,
     feature_engineering_lag,
     feature_engineering_min_max,
     feature_engineering_deltas,
@@ -17,8 +17,9 @@ from .features import (
     feature_engineering_ratios,
     feature_engineering_medias_moviles_lag,
     generar_shock_relativo_delta_lag,
-    crear_indicador_aguinaldo
+    crear_indicador_aguinaldo,
 )
+
 from config.config import (
     DATASET_TARGETS_CREADOS_PATH,
     FE_PATH,
@@ -46,19 +47,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ===========================
+# VARIABLES EN PESOS
+# ===========================
+VARIABLES_PESOS = [
+    "mrentabilidad", "mrentabilidad_annual", "mcomisiones", "mactivos_margen", "mpasivos_margen",
+    "mcuenta_corriente_adicional", "mcuenta_corriente", "mcaja_ahorro", "mcaja_ahorro_adicional",
+    "mcaja_ahorro_dolares", "mcuentas_saldo", "mautoservicio", "mtarjeta_visa_consumo",
+    "mtarjeta_master_consumo", "mprestamos_personales", "mprestamos_prendarios", "mprestamos_hipotecarios",
+    "mplazo_fijo_dolares", "mplazo_fijo_pesos", "minversion1_pesos", "minversion1_dolares", "minversion2",
+    "mpayroll", "mpayroll2", "mcuenta_debitos_automaticos", "mttarjeta_visa_debitos_automaticos",
+    "mttarjeta_master_debitos_automaticos", "mpagodeservicios", "mpagomiscuentas",
+    "mcajeros_propios_descuentos", "mtarjeta_visa_descuentos", "mtarjeta_master_descuentos",
+    "mcomisiones_mantenimiento", "mcomisiones_otras", "mforex_buy", "mforex_sell",
+    "mtransferencias_recibidas", "mtransferencias_emitidas", "mextraccion_autoservicio",
+    "mcheques_depositados", "mcheques_emitidos", "mcheques_depositados_rechazados",
+    "mcheques_emitidos_rechazados", "matm", "matm_other",
+    "Master_mfinanciacion_limite", "Master_msaldototal", "Master_msaldopesos", "Master_msaldodolares",
+    "Master_mconsumospesos", "Master_mconsumosdolares", "Master_mlimitecompra", "Master_madelantopesos",
+    "Master_madelantodolares", "Master_mpagado", "Master_mpagospesos", "Master_mpagosdolares",
+    "Master_mconsumototal", "Master_mpagominimo",
+    "Visa_mfinanciacion_limite", "Visa_msaldototal", "Visa_msaldopesos", "Visa_msaldodolares",
+    "Visa_mconsumospesos", "Visa_mconsumosdolares", "Visa_mlimitecompra", "Visa_madelantopesos",
+    "Visa_madelantodolares", "Visa_mpagado", "Visa_mpagospesos", "Visa_mpagosdolares",
+    "Visa_mconsumototal", "Visa_mpagominimo",
+]
+
 
 # ===========================
 # HELPERS LOCF / FLAGS
 # ===========================
 def aplicar_locf_con_flags(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aplica LOCF (pisado hacia atrás) sobre las variables indicadas y
-    deja en el dataframe los flags <variable>_locf creados por la función.
-    Devuelve el df ya corregido.
-    """
     logger.info("🩺 Corrigiendo meses anómalos usando valores del mes anterior (LOCF con flags)...")
 
-    # >>>> LISTA DE CORRECCIONES (con tus mismos meses) <<<<
     df = pisar_con_mes_anterior_duckdb(df, variable="active_quarter", meses_anomalos=[202006])
 
     df = pisar_con_mes_anterior_duckdb(df, variable="mrentabilidad", meses_anomalos=[201905, 201910, 202006])
@@ -79,9 +100,11 @@ def aplicar_locf_con_flags(df: pd.DataFrame) -> pd.DataFrame:
     df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_visa_debitos_automaticos", meses_anomalos=[201904])
     df = pisar_con_mes_anterior_duckdb(df, variable="mttarjeta_visa_debitos_automaticos", meses_anomalos=[201904])
 
-    for v in ["ccajeros_propios_descuentos", "mcajeros_propios_descuentos",
-              "ctarjeta_visa_descuentos", "mtarjeta_visa_descuentos",
-              "ctarjeta_master_descuentos", "mtarjeta_master_descuentos"]:
+    for v in [
+        "ccajeros_propios_descuentos", "mcajeros_propios_descuentos",
+        "ctarjeta_visa_descuentos", "mtarjeta_visa_descuentos",
+        "ctarjeta_master_descuentos", "mtarjeta_master_descuentos",
+    ]:
         df = pisar_con_mes_anterior_duckdb(
             df, variable=v,
             meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102]
@@ -90,11 +113,13 @@ def aplicar_locf_con_flags(df: pd.DataFrame) -> pd.DataFrame:
     df = pisar_con_mes_anterior_duckdb(df, variable="ccomisiones_otras", meses_anomalos=[201905, 201910, 202006])
     df = pisar_con_mes_anterior_duckdb(df, variable="mcomisiones_otras", meses_anomalos=[201905, 201910, 202006])
 
-    for v in ["cextraccion_autoservicio", "mextraccion_autoservicio",
-              "ccheques_depositados", "mcheques_depositados",
-              "ccheques_emitidos", "mcheques_emitidos",
-              "ccheques_depositados_rechazados", "mcheques_depositados_rechazados",
-              "ccheques_emitidos_rechazados", "mcheques_emitidos_rechazados"]:
+    for v in [
+        "cextraccion_autoservicio", "mextraccion_autoservicio",
+        "ccheques_depositados", "mcheques_depositados",
+        "ccheques_emitidos", "mcheques_emitidos",
+        "ccheques_depositados_rechazados", "mcheques_depositados_rechazados",
+        "ccheques_emitidos_rechazados", "mcheques_emitidos_rechazados",
+    ]:
         df = pisar_con_mes_anterior_duckdb(df, variable=v, meses_anomalos=[202006])
 
     df = pisar_con_mes_anterior_duckdb(df, variable="tcallcenter", meses_anomalos=[202006])
@@ -102,28 +127,24 @@ def aplicar_locf_con_flags(df: pd.DataFrame) -> pd.DataFrame:
     df = pisar_con_mes_anterior_duckdb(df, variable="thomebanking", meses_anomalos=[202006])
     df = pisar_con_mes_anterior_duckdb(df, variable="chomebanking_transacciones", meses_anomalos=[201910, 202006])
 
-    for v in ["ccajas_transacciones", "ccajas_consultas", "ccajas_depositos",
-              "ccajas_extracciones", "ccajas_otras", "catm_trx", "matm",
-              "catm_trx_other", "matm_other", "ctrx_quarter"]:
+    for v in [
+        "ccajas_transacciones", "ccajas_consultas", "ccajas_depositos",
+        "ccajas_extracciones", "ccajas_otras", "catm_trx", "matm",
+        "catm_trx_other", "matm_other", "ctrx_quarter",
+    ]:
         df = pisar_con_mes_anterior_duckdb(df, variable=v, meses_anomalos=[202006])
 
     logger.info("✅ Corrección LOCF finalizada (flags *_locf generados)")
-
     return df
 
 
 def agregar_contadores_locf(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Crea contadores por familia y un total de flags LOCF aplicados.
-    NO genera lags/deltas sobre estos contadores (se usan como features estáticas).
+    Suma total de flags LOCF y algunos contadores por familia (si existen).
     """
-    # Detectar todos los flags generados por LOCF
     locf_flags = [c for c in df.columns if c.endswith("_locf")]
-
-    # Total de variables corregidas ese mes/cliente
     df["n_locf_vars"] = df[locf_flags].sum(axis=1) if locf_flags else 0
 
-    # Grupos (ajustá listas si cambias variables corregidas)
     grupos = {
         "tarjetas_locf": [
             "ctarjeta_visa_transacciones_locf", "mtarjeta_visa_consumo_locf",
@@ -151,7 +172,7 @@ def agregar_contadores_locf(df: pd.DataFrame) -> pd.DataFrame:
         ],
         "comisiones_locf": [
             "mcomisiones_locf", "ccomisiones_otras_locf", "mcomisiones_otras_locf",
-            "mcomisiones_mantenimiento_locf"  # si en algún momento la agregás al LOCF
+            "mcomisiones_mantenimiento_locf",
         ],
         "desc_propios_locf": [
             "ccajeros_propios_descuentos_locf", "mcajeros_propios_descuentos_locf",
@@ -172,10 +193,7 @@ def agregar_contadores_locf(df: pd.DataFrame) -> pd.DataFrame:
 
     for nombre, cols in grupos.items():
         cols_validas = [c for c in cols if c in df.columns]
-        if cols_validas:
-            df[nombre] = df[cols_validas].sum(axis=1)
-        else:
-            df[nombre] = 0
+        df[nombre] = df[cols_validas].sum(axis=1) if cols_validas else 0
 
     logger.info("🧮 Contadores LOCF agregados (n_locf_vars y familias)")
     return df
@@ -190,7 +208,6 @@ def main():
     logger.info(f"🏷️ Experimento: {NOMBRE_EXPERIMENTO}")
     logger.info(f"🏷️ Versión FE: {SUFIJO_FE}")
 
-    # Paths
     path_input = DATASET_TARGETS_CREADOS_PATH
     path_output = FE_PATH
 
@@ -201,18 +218,10 @@ def main():
     df = pd.read_csv(path_input, compression="gzip")
     logger.info(f"✅ Dataset cargado correctamente con forma: {df.shape}")
 
-    # 01.1 DROPS por posible data drift / poca confianza
+    # 01.1 DROPS por poca confianza
     logger.info("🧹 Eliminando columnas con posible data drift / poco confiables...")
     df.drop(
-        columns=[
-            "mprestamos_personales",
-            "cprestamos_personales",
-            "internet",
-            "cpagodeservicios",
-            "mpagodeservicios",
-            "tmobile_app",
-            "cmobile_app_trx",
-        ],
+        columns=["internet", "cpagodeservicios", "mpagodeservicios", "tmobile_app", "cmobile_app_trx"],
         inplace=True,
         errors="ignore",
     )
@@ -221,120 +230,99 @@ def main():
     # 01.2 LOCF + FLAGS
     df = aplicar_locf_con_flags(df)
 
-    # 01.3 Contadores/agrupadores de flags (features estáticas)
+    # 01.3 Contadores LOCF (features estáticas)
     df = agregar_contadores_locf(df)
 
-    # 02. FEATURE ENGINEERING (versión conservadora)
-    # Importante: **NO** incluir *_locf ni los contadores en listas de atributos/ratios/etc.
-    atributos = [
-        # Rentabilidad / comisiones / márgenes
-        "mrentabilidad", "mcomisiones", "mcomisiones_mantenimiento", "mpasivos_margen", "mactivos_margen",
-
-        # Saldos y cajas
-        "mcuentas_saldo", "mcaja_ahorro", "mcaja_ahorro_dolares",
-        "mcuenta_corriente", "mcuenta_corriente_adicional", "mcaja_ahorro_adicional",
-
-        # Débito / cajeros / sucursales
-        "ctarjeta_debito_transacciones", "mautoservicio",
-        "catm_trx", "matm", "catm_trx_other", "matm_other",
+    # ===========================
+    # 02. ATRIBUTOS (no-pesos vs pesos)
+    # ===========================
+    atributos_no_pesos = [
+        "ctarjeta_debito_transacciones",
+        "catm_trx", "catm_trx_other",
         "ccajas_transacciones",
-
-        # Canales digitales / call center
-        "thomebanking", "chomebanking_transacciones", "tcallcenter", "ccallcenter_transacciones",
-
-        # Tarjetas (resúmenes)
-        "ctarjeta_visa_transacciones", "mtarjeta_visa_consumo",
-        "ctarjeta_master_transacciones", "mtarjeta_master_consumo",
-        "Master_msaldototal", "Master_mconsumototal", "Master_mpagado",
-        "Master_mlimitecompra", "Master_madelantopesos",
-        "Visa_msaldototal", "Visa_mconsumototal", "Visa_mpagado",
-        "Visa_mlimitecompra", "Visa_madelantopesos",
-
-        # Préstamos (se mantienen prend/hipo)
-        "mprestamos_prendarios", "mprestamos_hipotecarios",
-
-        # Inversiones / ahorro estructural
-        "mplazo_fijo_pesos", "mplazo_fijo_dolares",
-        "minversion1_pesos", "minversion1_dolares", "minversion2",
-
-        # Payroll
+        "thomebanking", "chomebanking_transacciones",
+        "tcallcenter", "ccallcenter_transacciones",
+        "ctarjeta_visa_transacciones", "ctarjeta_master_transacciones",
         "cpayroll_trx", "cpayroll2_trx",
-
-        # Actividad global
         "ctrx_quarter",
     ]
+    atributos_no_pesos = [c for c in atributos_no_pesos if c in df.columns]
+    atributos_pesos = [c for c in VARIABLES_PESOS if c in df.columns]
+    logger.info(f"📌 atributos_no_pesos: {len(atributos_no_pesos)} | atributos_pesos: {len(atributos_pesos)}")
 
-    # Ratios (sin *_locf ni contadores)
+    # ===========================
+    # 03. Drift features SOLO pesos => genera *_rz_mes
+    # ===========================
+    if atributos_pesos:
+        logger.info("💸 Generando drift-features monetarias: solo *_rz_mes")
+        df = agregar_drift_features_monetarias(df, atributos_pesos)
+
+    # ===========================
+    # 04. FE TEMPORAL (lags/deltas/MA/shock)
+    # ===========================
+    atributos_temporales = atributos_no_pesos + [
+        f"{c}_rz_mes" for c in atributos_pesos if f"{c}_rz_mes" in df.columns
+    ]
+
+    cant_lag = 3
+    window_size_ma = 3
+
+    logger.info("🔧 Iniciando feature engineering temporal...")
+    df_fe = feature_engineering_lag(df, columnas=atributos_temporales, cant_lag=cant_lag)
+    df_fe = feature_engineering_deltas(df_fe, columnas=atributos_temporales, cant_lag=cant_lag)
+    df_fe = feature_engineering_medias_moviles(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+    df_fe = feature_engineering_medias_moviles_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+    df_fe = generar_shock_relativo_delta_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+
+    # ===========================
+    # 05. FE NO TEMPORAL (ratios / cumsum / minmax / aguinaldo)
+    # ===========================
     ratio_pairs = [
-        # Utilización / presión sobre límite de tarjetas
         ("Master_msaldototal", "Master_mlimitecompra"),
         ("Visa_msaldototal", "Visa_mlimitecompra"),
         ("Master_mconsumototal", "Master_mlimitecompra"),
         ("Visa_mconsumototal", "Visa_mlimitecompra"),
-
-        # Adelantos vs consumo (estrés)
         ("Master_madelantopesos", "Master_mconsumototal"),
         ("Visa_madelantopesos", "Visa_mconsumototal"),
-
-        # Préstamos vs saldo total
         ("mprestamos_prendarios", "mcuentas_saldo"),
         ("mprestamos_hipotecarios", "mcuentas_saldo"),
-
-        # Inversiones vs saldo
         ("minversion1_pesos", "mcuentas_saldo"),
         ("minversion1_dolares", "mcuentas_saldo"),
         ("minversion2", "mcuentas_saldo"),
         ("mplazo_fijo_pesos", "mcuentas_saldo"),
         ("mplazo_fijo_dolares", "mcuentas_saldo"),
-
-        # Liquidez vs saldo
         ("mcaja_ahorro", "mcuentas_saldo"),
         ("mcuenta_corriente", "mcuentas_saldo"),
-
-        # Comisiones vs rentabilidad
         ("mcomisiones", "mrentabilidad"),
-
-        # Penetración digital sobre actividad total
         ("chomebanking_transacciones", "ctrx_quarter"),
     ]
+    ratio_pairs = [(a, b) for (a, b) in ratio_pairs if a in df_fe.columns and b in df_fe.columns]
 
-    # Cumsum de “engagement” (sin *_locf)
     cumsum_cols = [
         "ctrx_quarter", "cpayroll_trx", "cpayroll2_trx",
         "chomebanking_transacciones", "ccallcenter_transacciones",
         "ctarjeta_debito_transacciones", "ctarjeta_visa_transacciones",
         "ctarjeta_master_transacciones", "ccajas_transacciones",
     ]
+    cumsum_cols = [c for c in cumsum_cols if c in df_fe.columns]
 
-    # Min/max histórico por cliente (sin *_locf)
-    minmax_cols = [
-        "mcuentas_saldo", "mcaja_ahorro", "mcaja_ahorro_dolares",
-        "mcuenta_corriente", "mplazo_fijo_pesos", "mplazo_fijo_dolares",
-        "minversion1_pesos", "minversion1_dolares", "minversion2",
-        "Master_mlimitecompra", "Visa_mlimitecompra",
-        "Master_msaldototal", "Visa_msaldototal",
-    ]
+    # min/max sobre rz_mes (desinflado por mes)
+    minmax_cols_corr = [f"{c}_rz_mes" for c in atributos_pesos if f"{c}_rz_mes" in df_fe.columns]
 
-    # Parámetros de ventanas (conservador)
-    cant_lag = 2
-    window_size = 2
+    WINDOW_STATS = 6
+    STRICT = False  # si quisieras exigir ventana completa, ponelo en True
 
-    logger.info("🔧 Iniciando feature engineering...")
-
-    # IMPORTANTE: los contadores *_locf y n_locf_vars NO pasan por estas funciones
-    df_fe = feature_engineering_lag(df, columnas=atributos, cant_lag=cant_lag)
-    df_fe = feature_engineering_deltas(df_fe, columnas=atributos, cant_lag=cant_lag)
-    df_fe = feature_engineering_medias_moviles(df_fe, columnas=atributos, window_size=window_size)
-    df_fe = feature_engineering_medias_moviles_lag(df_fe, columnas=atributos, window_size=window_size)
-    df_fe = generar_shock_relativo_delta_lag(df_fe, columnas=atributos, window_size=window_size)
+    logger.info("🔧 Iniciando feature engineering no-temporal (ratios/cumsum/minmax)...")
     df_fe = feature_engineering_ratios(df_fe, ratio_pairs=ratio_pairs)
-    df_fe = feature_engineering_cum_sum(df_fe, columnas=cumsum_cols)
-    df_fe = feature_engineering_min_max(df_fe, columnas=minmax_cols)
+    df_fe = feature_engineering_cum_sum(df_fe, columnas=cumsum_cols, window_size=WINDOW_STATS, strict=STRICT)
+    df_fe = feature_engineering_min_max(df_fe, columnas=minmax_cols_corr, window_size=WINDOW_STATS, strict=STRICT)
     df_fe = crear_indicador_aguinaldo(df_fe)
 
     logger.info(f"✅ Feature engineering finalizado. Forma resultante: {df_fe.shape}")
 
-    # 03. GUARDAR PARQUET
+    # ===========================
+    # 06. GUARDAR PARQUET
+    # ===========================
     logger.info("💾 Guardando dataset FE en formato Parquet con compresión ZSTD...")
     os.makedirs(os.path.dirname(path_output), exist_ok=True)
 
@@ -357,7 +345,6 @@ def main():
     except OSError:
         logger.info(f"✅ Archivo guardado en: {path_output} (no se pudo leer tamaño local)")
 
-    # 04. DURACIÓN
     duracion_min = (time.time() - inicio) / 60
     logger.info(f"⏱️ Duración total del proceso: {duracion_min:.2f} minutos")
     logger.info("🎯 Ejecución de Feature Engineering finalizada correctamente.")
