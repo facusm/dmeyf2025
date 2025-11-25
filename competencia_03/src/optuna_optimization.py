@@ -153,118 +153,83 @@ def get_boosting_schedule(n_train: int) -> tuple[int, int]:
     return max_rounds, es_rounds
 
 
-def suggest_params_dynamic(trial, n_train: int) -> dict:
-    """
-    Rangos de hiperparámetros ajustados al tamaño del dataset (post-undersampling).
 
-    Idea:
-    - Dataset grande -> más capacidad pero min_data_in_leaf alto.
-    - Dataset chico (por undersampling) -> menos leaves y min_data_in_leaf más chico.
-    """
+def suggest_params(trial, n_train: int, base: dict) -> dict:
+    params = base.copy()
 
-    if n_train >= 4_000_000:          # muy grande
-        nl_lo, nl_hi = 128, 512
-        ml_lo, ml_hi = 400, 4000
-        l2_hi = 50.0
-    elif n_train >= 1_000_000:       # grande
-        nl_lo, nl_hi = 64, 384
-        ml_lo, ml_hi = 200, 3000
-        l2_hi = 30.0
-    elif n_train >= 300_000:         # medio
-        nl_lo, nl_hi = 32, 256
-        ml_lo, ml_hi = 50, 1500
-        l2_hi = 20.0
-    else:                            # chico (undersampling fuerte)
-        nl_lo, nl_hi = 16, 128
-        ml_lo, ml_hi = 20, 500
-        l2_hi = 10.0
+    lr_exp = trial.suggest_float("lr_exp", -8.0, -2.0)
+    params["learning_rate"] = float(2.0 ** lr_exp)
 
-    # sanity
-    ml_lo = max(10, ml_lo)
-    ml_hi = max(ml_lo + 10, ml_hi)
+    leaves_pow = trial.suggest_int("num_leaves_pow", 4, 10)  # 16..1024
+    num_leaves = int(2 ** leaves_pow)
+    params["num_leaves"] = num_leaves
 
-    params = LGBM_PARAMS_BASE.copy()
+    # cota tipo APO: min_data_in_leaf <= n_train / num_leaves
+    max_leaf = max(2, n_train // max(2, num_leaves))
+    max_pow = int(np.floor(np.log2(max_leaf)))
+    leaf_pow = trial.suggest_int("min_data_in_leaf_pow", 0, max_pow)
+    params["min_data_in_leaf"] = int(2 ** leaf_pow)
+
     params.update({
-        "num_leaves": trial.suggest_int("num_leaves", nl_lo, nl_hi),
-        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", ml_lo, ml_hi),
-        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
-        "max_bin": trial.suggest_categorical("max_bin", [31, 63, 127, 255]),
-        "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
-        "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
-        "bagging_freq": trial.suggest_int("bagging_freq", 0, 7),
-        "lambda_l2": trial.suggest_float("lambda_l2", 1e-4, l2_hi, log=True),
-        "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 1.0),
+        "feature_fraction": float(trial.suggest_float("feature_fraction", 0.05, 1.0)),
+        "bagging_fraction": float(trial.suggest_float("bagging_fraction", 0.5, 1.0)),
+        "bagging_freq": int(trial.suggest_int("bagging_freq", 1, 10)),
+        "min_gain_to_split": float(trial.suggest_float("min_gain_to_split", 0.0, 1.0)),
+        "lambda_l2": float(trial.suggest_float("lambda_l2", 1e-4, 50.0, log=True)),
     })
+
+
     return params
 
 
 def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semilleros):
-    """
-    Función objetivo sin CV explícito.
-
-    - Entrena en MESES_TRAIN (potencialmente undersampleado).
-    - Valida en MESES_VAL_OPTUNA (sin undersampling, distribución real).
-    - Para cada repetición:
-        * Entrena un modelo por semilla (subconjunto de `semilleros`).
-        * Hace ensemble de probabilidades en validación.
-        * Calcula la ganancia en la MESETA del ENSEMBLE.
-    - Devuelve a Optuna el PROMEDIO de ganancias de meseta sobre las repeticiones.
-    """
-
     n_train = X_train.shape[0]
 
-    # HP dinámicos según tamaño del dataset
-    params_base = suggest_params_dynamic(trial, n_train)
+    # 1) Sugerir HP al estilo APO (y guardar el dict real que sirve para reentrenar)
+    params_base = suggest_params(trial, n_train, LGBM_PARAMS_BASE)
 
-    # num_boost_round y early_stopping también en función de n_train
+    # Guardá el dict REAL de LGBM (sin seed) para reutilizar en main
+    trial.set_user_attr("lgb_params", params_base)
+
+    # 2) Schedule de boosting
     num_boost_round, early_stopping_rounds = get_boosting_schedule(n_train)
 
-    # Datasets (una sola vez)
     dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train)
     dvalid = lgb.Dataset(X_valid, label=y_valid, weight=w_valid)
 
-    # ================================
-    # 🔁 Repeticiones estilo APO (repe)
-    # ================================
-
+    # 3) Repeticiones (repes)
+    semilleros = np.asarray(list(semilleros), dtype=int)
     total_seeds = len(semilleros)
+    if total_seeds == 0:
+        logger.warning("⚠️ semilleros vacío.")
+        return 0.0
+
     n_repe = max(1, int(N_REPE_OPTUNA))
+    n_repe = min(n_repe, total_seeds)  # evita repes > seeds
 
-    # Cantidad de seeds por repetición (como ksemillerio * repe en R)
-    ksem = total_seeds // n_repe
-    if ksem == 0:
-        # Demasiadas repes para tan pocas seeds → caemos a 1 repe
-        n_repe = 1
-        ksem = total_seeds
+    # 🔀 Barajado reproducible por trial (para no usar siempre los mismos bloques)
+    rng = np.random.default_rng(10_000 + int(trial.number))
+    semilleros_perm = rng.permutation(semilleros)
 
-    ganancias_repes = []   # ganancia de meseta por repetición
-    umbrales_repes = []    # umbral de meseta por repetición
-    N_opts_repes = []      # N óptimo por repetición
-    best_iters_repes = []  # best_iteration promedio por repetición
+    # ✅ Partición que USA TODAS las seeds (no pierde el resto)
+    bloques = np.array_split(semilleros_perm, n_repe)
 
-    logger.info(
-        f"🧪 Trial {trial.number} | total_seeds={total_seeds}, "
-        f"repe={n_repe}, ksem={ksem}"
-    )
+    ganancias_repes = []
+    umbrales_repes = []
+    N_opts_repes = []
+    best_iters_repes = []
 
-    for r in range(n_repe):
-        inicio = r * ksem
-        fin = inicio + ksem
-        semillas_repe = semilleros[inicio:fin]
+    logger.info(f"🧪 Trial {trial.number} | total_seeds={total_seeds}, repe={n_repe}")
 
+    for r, semillas_repe in enumerate(bloques, start=1):
         if len(semillas_repe) == 0:
             continue
 
-        sum_preds_valid = None
+        sum_preds_valid = np.zeros(X_valid.shape[0], dtype=float)
         best_iters_this_repe = []
 
-        logger.info(
-            f"   🔁 Repe {r+1}/{n_repe} | seeds usadas: {len(semillas_repe)}"
-        )
+        logger.info(f"   🔁 Repe {r}/{n_repe} | seeds usadas: {len(semillas_repe)}")
 
-        # ==============
-        # Semillerio BO
-        # ==============
         for seed in semillas_repe:
             params = params_base.copy()
             params["seed"] = int(seed)
@@ -273,7 +238,7 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
                 params,
                 dtrain,
                 valid_sets=[dvalid],
-                feval=lgb_gan_eval,  # métrica de MESETA
+                feval=lgb_gan_eval,
                 num_boost_round=num_boost_round,
                 callbacks=[
                     lgb.early_stopping(early_stopping_rounds, verbose=False),
@@ -281,21 +246,12 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
                 ],
             )
 
-            best_iters_this_repe.append(int(model.best_iteration))
+            bi = int(model.best_iteration) if model.best_iteration is not None else num_boost_round
+            best_iters_this_repe.append(bi)
 
-            # Predicciones en valid para esta seed
-            y_pred = model.predict(X_valid, num_iteration=model.best_iteration)
+            sum_preds_valid += model.predict(X_valid, num_iteration=bi)
 
-            # Acumular para ensemble de esta repetición
-            if sum_preds_valid is None:
-                sum_preds_valid = y_pred
-            else:
-                sum_preds_valid += y_pred
-
-        # ================================
-        # Ensemble final de ESTA repetición
-        # ================================
-        y_pred_ensemble = sum_preds_valid / len(semillas_repe)
+        y_pred_ensemble = sum_preds_valid / float(len(semillas_repe))
 
         umbral_r, N_opt_r, ganancia_r = calcular_umbral_y_ganancia_meseta(
             y_pred=y_pred_ensemble,
@@ -308,43 +264,35 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
         best_iters_repes.append(float(np.mean(best_iters_this_repe)))
 
         logger.info(
-            f"   ✅ Repe {r+1}/{n_repe} | "
-            f"Ganancia meseta: ${ganancia_r:,.0f} | "
+            f"   ✅ Repe {r}/{n_repe} | Ganancia meseta: ${ganancia_r:,.0f} | "
             f"N_opt: {N_opt_r:,} | umbral: {umbral_r:.6f}"
         )
 
-    # Seguridad
     if not ganancias_repes:
         logger.warning("⚠️ No se pudo calcular ganancia en ninguna repetición.")
         return 0.0
 
-    # =================================
-    # Promedio estilo APO sobre repes
-    # =================================
     ganancia_prom = float(np.mean(ganancias_repes))
     best_iter_prom = int(np.round(np.mean(best_iters_repes)))
 
-    # Para almacenar un N_opt y umbral representativo,
-    # tomamos el de la repetición con mejor ganancia
     idx_best_repe = int(np.argmax(ganancias_repes))
     umbral_ens = float(umbrales_repes[idx_best_repe])
     N_opt_ens = int(N_opts_repes[idx_best_repe])
 
-    # ========= Metadata del trial =========
-    trial.set_user_attr("ganancia_ensemble", ganancia_prom)           # promedio de mesetas
-    trial.set_user_attr("ganancias_repes", ganancias_repes)           # detalle por repe
-    trial.set_user_attr("umbral_ensemble", umbral_ens)                # de la mejor repe
-    trial.set_user_attr("N_opt_ensemble", N_opt_ens)                  # de la mejor repe
+    trial.set_user_attr("ganancia_ensemble", ganancia_prom)
+    trial.set_user_attr("ganancias_repes", ganancias_repes)
+    trial.set_user_attr("umbral_ensemble", umbral_ens)
+    trial.set_user_attr("N_opt_ensemble", N_opt_ens)
     trial.set_user_attr("best_iter", best_iter_prom)
     trial.set_user_attr("n_train", int(n_train))
 
     logger.info(
-        f"✅ Trial {trial.number} COMPLETADO | "
-        f"Ganancia promedio meseta (sobre {n_repe} repes): ${ganancia_prom:,.0f}"
+        f"✅ Trial {trial.number} COMPLETADO | Ganancia promedio meseta ({n_repe} repes): "
+        f"${ganancia_prom:,.0f}"
     )
 
-    # Objetivo de Optuna: promedio de ganancias de meseta (como gan_mesetas_prom en APO)
     return ganancia_prom
+
 
 
 def ejecutar_optimizacion(
@@ -360,21 +308,17 @@ def ejecutar_optimizacion(
 ):
     """
     Ejecuta Optuna con validación temporal (MES_VAL_OPTUNA) y multisemilla.
-    Usa como métrica objetivo la ganancia del ENSEMBLE de semillas en el set de validación.
+    Objetivo: ganancia (meseta) del ENSEMBLE (promedio sobre repes).
     """
     study = crear_estudio_optuna(seed, load_if_exists=True)
     n_trials = n_trials or N_TRIALS
 
-    # Trials ya completos
-    completados = len(
-        [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-    )
+    completados = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
     logger.info(f"📊 Trials completados: {completados}/{n_trials}")
 
     restantes = n_trials - completados
     if restantes > 0:
         logger.info(f"🚀 Ejecutando {restantes} trials adicionales...")
-
         study.optimize(
             lambda trial: objective(
                 trial,
@@ -391,56 +335,24 @@ def ejecutar_optimizacion(
     else:
         logger.info("✅ Estudio ya alcanzó el número de trials requerido.")
 
-    # =========================
-    # 🔍 RESUMEN DEL MEJOR TRIAL
-    # =========================
     best_trial = study.best_trial
-    best_value = float(study.best_value)  # == ganancia_ensemble (promedio)
-
-    ganancia_ensemble = float(
-        best_trial.user_attrs.get("ganancia_ensemble", best_value)
-    )
-    best_iter = (
-        int(best_trial.user_attrs["best_iter"])
-        if "best_iter" in best_trial.user_attrs
-        else None
-    )
-    umbral_ensemble = (
-        float(best_trial.user_attrs["umbral_ensemble"])
-        if "umbral_ensemble" in best_trial.user_attrs
-        else None
-    )
-    N_opt_ensemble = (
-        int(best_trial.user_attrs["N_opt_ensemble"])
-        if "N_opt_ensemble" in best_trial.user_attrs
-        else None
-    )
-    ganancias_repes = best_trial.user_attrs.get("ganancias_repes", None)
+    best_value = float(study.best_value)
 
     logger.info("✅ OPTIMIZACIÓN COMPLETADA")
     logger.info(f"🏅 Mejor trial: #{best_trial.number}")
     logger.info(f"💰 Mejor ganancia (objective / promedio meseta): ${best_value:,.0f}")
 
-    if umbral_ensemble is not None and N_opt_ensemble is not None:
+    if "umbral_ensemble" in best_trial.user_attrs and "N_opt_ensemble" in best_trial.user_attrs:
         logger.info(
-            f"🎯 Umbral ensemble (valid): {umbral_ensemble:.6f} | "
-            f"N óptimo ensemble: {N_opt_ensemble:,}"
+            f"🎯 Umbral ensemble (valid): {best_trial.user_attrs['umbral_ensemble']:.6f} | "
+            f"N óptimo ensemble: {best_trial.user_attrs['N_opt_ensemble']:,}"
         )
 
-    if best_iter is not None:
-        logger.info(f"🔁 Iteraciones promedio (best_iter): {best_iter}")
+    if "best_iter" in best_trial.user_attrs:
+        logger.info(f"🔁 Iteraciones promedio (best_iter): {int(best_trial.user_attrs['best_iter'])}")
 
-    logger.info(f"⚙️ Mejores hiperparámetros: {best_trial.params}")
-
-    if ganancias_repes is not None:
-        try:
-            gr = [float(g) for g in ganancias_repes]
-            logger.info(
-                "📈 Ganancias de meseta por repetición: "
-                + ", ".join(f"{g:,.0f}" for g in gr)
-            )
-        except Exception:
-            logger.info("📈 Ganancias por repetición disponibles en user_attrs.")
+    if "lgb_params" in best_trial.user_attrs:
+        logger.info(f"⚙️ Mejores hiperparámetros (LGBM): {best_trial.user_attrs['lgb_params']}")
 
     return study
 

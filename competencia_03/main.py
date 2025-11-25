@@ -127,33 +127,42 @@ def main():
         seed=SEMILLAS_OPTUNA[0],
     )
 
-    # Mejor trial encontrado
     best_trial = study.best_trial
 
-    # Mejor conjunto de hiperparámetros encontrados
-    best_params = best_trial.params
+    # ✅ 1) Params entrenables de LGBM: vienen guardados en user_attrs
+    lgbm_params_final = best_trial.user_attrs.get("lgb_params")
+    if lgbm_params_final is None:
+        logger.warning(
+            "⚠️ best_trial.user_attrs['lgb_params'] no existe. "
+            "Uso solo LGBM_PARAMS_BASE (no se puede reconstruir desde trial.params)."
+        )
+        lgbm_params_final = LGBM_PARAMS_BASE.copy()
 
-    # Hiperparámetros finales para entrenar modelos definitivos (FIJOS + mejores encontrados)
-    lgbm_params_final = LGBM_PARAMS_BASE.copy()
-    lgbm_params_final.update(best_params)
-    
-    # Iteraciones óptimas (promedio sobre repes/seeds)
-    best_iter = int(best_trial.user_attrs["best_iter"])
+    # Asegurar copia
+    lgbm_params_final = dict(lgbm_params_final)
 
-    # Información adicional del best_trial
+    # ✅ 2) Iteraciones óptimas (promedio)
+    best_iter = best_trial.user_attrs.get("best_iter")
+    if best_iter is None:
+        raise KeyError("best_iter no está en user_attrs del best_trial (corriste un estudio viejo?).")
+    best_iter = int(best_iter)
+
+    # ✅ 3) Info extra
     N_opt_ensemble = best_trial.user_attrs.get("N_opt_ensemble")
     umbral_ensemble = best_trial.user_attrs.get("umbral_ensemble")
 
-    logger.info(f"✅ Mejor trial #{study.best_trial.number} con ganancia {study.best_value:,.0f}")
-    logger.info(f"📌 Hiperparámetros finales LightGBM: {lgbm_params_final}")
-    logger.info(f"   Iteraciones óptimas (promedio): {best_iter}")
+    logger.info(f"✅ Mejor trial #{best_trial.number} con ganancia {study.best_value:,.0f}")
+    logger.info(f"📌 Params finales LightGBM (lgb_params): {lgbm_params_final}")
+    logger.info(f"🧾 Optuna params crudos (trial.params): {best_trial.params}")
+    logger.info(f"🔁 Iteraciones óptimas (best_iter): {best_iter}")
 
-    # Logger adicional para ensemble
     if N_opt_ensemble is not None and umbral_ensemble is not None:
         logger.info(
-            f"   N óptimo ensemble (valid meseta): {N_opt_ensemble:,} | "
+            f"🎯 N óptimo ensemble (valid meseta): {N_opt_ensemble:,} | "
             f"umbral ensemble: {umbral_ensemble:.6f}"
         )
+
+
 
     # 4️⃣ Entrenamiento modelos para validación externa (APO sobre 202107)
     logger.info("\n🌱 Entrenando modelos para validación externa (APO)...")

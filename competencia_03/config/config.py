@@ -191,18 +191,25 @@ COSTO_ESTIMULO = -20000
 # PARAMS BASE DEL MODELO DE LIGHTGBM
 # ==================================================================================
 
+
 LGBM_PARAMS_BASE = {
     "objective": "binary",
-    "metric": "None",
+    "metric": "None",                 
     "boosting_type": "gbdt",
     "first_metric_only": True,
     "boost_from_average": True,
     "feature_pre_filter": False,
+
+    "verbosity": -1,                  
+    "force_row_wise": True,           # evita warnings y suele ser más estable
+
     "max_depth": -1,
+    "max_bin": 31,
     "lambda_l1": 0.0,
     "num_threads": -1,
-    "verbose": -1,
 }
+
+
 
 # ==================================================================================
 # COLUMNAS
