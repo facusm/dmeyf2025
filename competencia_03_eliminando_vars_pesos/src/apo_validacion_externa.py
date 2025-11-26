@@ -30,9 +30,10 @@ def _calcular_ganancias_por_cortes(y_pred, weight, cortes):
     if n == 0:
         return np.zeros(len(cortes), dtype=float)
 
-    gan = (
-        np.where(weight == 1.00002, GANANCIA_ACIERTO, 0)
-        - np.where(weight < 1.00002, abs(COSTO_ESTIMULO), 0)
+    gan = np.where(
+        weight == 1.00002,
+        GANANCIA_ACIERTO + COSTO_ESTIMULO,  # BAJA+2: 780k + (-20k) = 760k
+        COSTO_ESTIMULO  # CONTINUA o BAJA +1: -20k
     )
 
     orden = np.argsort(y_pred)[::-1]
@@ -72,7 +73,7 @@ def entrenar_modelos_val_externa(
 
     for seed in semillas:
         seed = int(seed)
-        model_path = os.path.join(model_dir, f"lgbm_valext_seed_{seed}.txt")
+        model_path = os.path.join(model_dir, f"lgbm_valext_seed_{seed}_it{num_boost_round}.txt")
 
         if os.path.exists(model_path):
             logger.info(f"♻️ Modelo val_ext para seed={seed} ya existe → se reutiliza.")
@@ -86,8 +87,6 @@ def entrenar_modelos_val_externa(
             params_seed,
             dtrain,
             num_boost_round=num_boost_round,
-            valid_sets=[],
-            verbose_eval=False,
         )
 
         model.save_model(model_path)
@@ -102,6 +101,7 @@ def seleccionar_N_optimo_APO(
     model_dir: str | None = None,
     ksem: int | None = None,
     n_apo: int | None = None,
+    num_boost_round: int | None = None,
 ):
     """
     Replica la lógica APO sobre la validación externa (p.ej. mes 202107).
@@ -127,10 +127,19 @@ def seleccionar_N_optimo_APO(
     semillas = list(semillas)
     total_seeds = len(semillas)
 
+    if total_seeds < ksem:
+        raise ValueError(
+            f"SEMILLAS_APO insuficientes: total_seeds={total_seeds} < ksem={ksem}. "
+            "No se puede correr APO (no alcanza para 1 repetición)."
+        )
+    
+    if num_boost_round is None:
+        raise ValueError("num_boost_round es None. Pasá best_iter desde main.py.")
+
     esperado = ksem * n_apo
     if total_seeds < esperado:
         logger.warning(
-            f"⚠️ SEMILLAS_ENSEMBLE tiene {total_seeds} seeds pero se esperaban "
+            f"⚠️ SEMILLAS_APO tiene {total_seeds} seeds pero se esperaban "
             f"{esperado} (ksem={ksem}, APO={n_apo}). Se usará lo que haya."
         )
         n_apo = total_seeds // ksem
@@ -158,7 +167,7 @@ def seleccionar_N_optimo_APO(
 
         for seed in semillas_repe:
             seed = int(seed)
-            model_path = os.path.join(model_dir, f"lgbm_valext_seed_{seed}.txt")
+            model_path = os.path.join(model_dir, f"lgbm_valext_seed_{seed}_it{num_boost_round}.txt")
 
             if not os.path.exists(model_path):
                 raise FileNotFoundError(
@@ -167,7 +176,7 @@ def seleccionar_N_optimo_APO(
                 )
 
             model = lgb.Booster(model_file=model_path)
-            y_pred = model.predict(X_valid)
+            y_pred = model.predict(X_valid, num_iteration=num_boost_round)
 
             if sum_preds is None:
                 sum_preds = y_pred

@@ -45,9 +45,10 @@ def calcular_umbral_y_ganancia_meseta(
         return 0.0, 0, 0.0
 
     # Misma definición de "gan" que tu lgb_gan_eval actual
-    gan = (
-        np.where(weight == 1.00002, GANANCIA_ACIERTO, 0)
-        - np.where(weight < 1.00002, abs(COSTO_ESTIMULO), 0)
+    gan = np.where(
+    weight == 1.00002,
+    GANANCIA_ACIERTO + COSTO_ESTIMULO,  # 780k - 20k = 760k
+    COSTO_ESTIMULO                      # -20k para incentivado no-BAJA+2
     )
 
     # Ordenar por probabilidad descendente
@@ -164,114 +165,73 @@ def suggest_params(trial, n_train: int, base: dict) -> tuple[dict, int]:
 
 
 def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semilleros):
-    """Objetivo de Optuna: maximizar ganancia_meseta promedio."""
     n_train = X_train.shape[0]
-    
-    # 1) Sugerir hiperparámetros
-
     params_base, num_boost_round = suggest_params(trial, n_train, LGBM_PARAMS_BASE)
 
-    trial.set_user_attr("lgb_params", params_base)
-    trial.set_user_attr("best_iter", int(num_boost_round))        # para tu main.py
-    trial.set_user_attr("num_boost_round", int(num_boost_round))  # opcional
-    
-  
-    
     dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train)
-    dvalid = lgb.Dataset(X_valid, label=y_valid, weight=w_valid)
-    
-    # 3) Repeticiones con semillas
+
     semilleros = np.asarray(list(semilleros), dtype=int)
     total_seeds = len(semilleros)
-    
     if total_seeds == 0:
         logger.warning("⚠️ semilleros vacío.")
         return 0.0
-    
+
     n_repe = max(1, int(N_REPE_OPTUNA))
     n_repe = min(n_repe, total_seeds)
-    
-    # Barajado reproducible por trial
+
     rng = np.random.default_rng(10_000 + int(trial.number))
     semilleros_perm = rng.permutation(semilleros)
     bloques = np.array_split(semilleros_perm, n_repe)
-    
-    ganancias_repes = []
-    umbrales_repes = []
-    N_opts_repes = []
-    # ✅ Ya NO trackeas best_iters
-    
+
+    ganancias_repes, umbrales_repes, N_opts_repes = [], [], []
+
     logger.info(f"🧪 Trial {trial.number} | total_seeds={total_seeds}, repe={n_repe}")
-    
+
     for r, semillas_repe in enumerate(bloques, start=1):
         if len(semillas_repe) == 0:
             continue
-        
+
         sum_preds_valid = np.zeros(X_valid.shape[0], dtype=float)
-        # ✅ Ya NO creas best_iters_this_repe
-        
         logger.info(f"   🔁 Repe {r}/{n_repe} | seeds: {len(semillas_repe)}")
-        
+
         for seed in semillas_repe:
             params = params_base.copy()
             params["seed"] = int(seed)
-            
-            # ✅ SIN early stopping
+
             model = lgb.train(
                 params,
                 dtrain,
-                valid_sets=[dvalid],
-                feval=lgb_gan_eval,
                 num_boost_round=num_boost_round,
-                callbacks=[
-                    lgb.log_evaluation(period=0),
-                ],
+                callbacks=[lgb.log_evaluation(period=0)],
             )
-            
-            # ✅ Usar todas las iteraciones directamente
+
             sum_preds_valid += model.predict(X_valid, num_iteration=num_boost_round)
 
-        
         y_pred_ensemble = sum_preds_valid / float(len(semillas_repe))
-        
-        umbral_r, N_opt_r, ganancia_r = calcular_umbral_y_ganancia_meseta(
-            y_pred=y_pred_ensemble,
-            weight=w_valid,
-        )
-        
+        umbral_r, N_opt_r, ganancia_r = calcular_umbral_y_ganancia_meseta(y_pred_ensemble, w_valid)
+
         ganancias_repes.append(float(ganancia_r))
         umbrales_repes.append(float(umbral_r))
         N_opts_repes.append(int(N_opt_r))
-        # ✅ Ya NO agregas best_iters
-        
-        logger.info(
-            f"   ✅ Repe {r}/{n_repe} | Ganancia meseta: ${ganancia_r:,.0f} | "
-            f"N_opt: {N_opt_r:,} | umbral: {umbral_r:.6f}"
-        )
-    
+
     if not ganancias_repes:
         logger.warning("⚠️ No se pudo calcular ganancia en ninguna repetición.")
         return 0.0
-    
+
     ganancia_prom = float(np.mean(ganancias_repes))
     idx_best_repe = int(np.argmax(ganancias_repes))
-    umbral_ens = float(umbrales_repes[idx_best_repe])
-    N_opt_ens = int(N_opts_repes[idx_best_repe])
-    # ✅ Ya NO calculas best_iter_prom
-    
+
+    trial.set_user_attr("lgb_params", params_base)
+    trial.set_user_attr("best_iter", int(num_boost_round))
     trial.set_user_attr("ganancia_ensemble", ganancia_prom)
     trial.set_user_attr("ganancias_repes", ganancias_repes)
-    trial.set_user_attr("umbral_ensemble", umbral_ens)
-    trial.set_user_attr("N_opt_ensemble", N_opt_ens)
-    trial.set_user_attr("best_iter", num_boost_round)  # ✅ Siempre es num_boost_round
+    trial.set_user_attr("umbral_ensemble", float(umbrales_repes[idx_best_repe]))
+    trial.set_user_attr("N_opt_ensemble", int(N_opts_repes[idx_best_repe]))
     trial.set_user_attr("n_train", int(n_train))
-    
-    logger.info(
-        f"✅ Trial {trial.number} COMPLETADO | Ganancia promedio meseta ({n_repe} repes): "
-        f"${ganancia_prom:,.0f}"
-    )
-    
+
     return ganancia_prom
+
+
 
 
 

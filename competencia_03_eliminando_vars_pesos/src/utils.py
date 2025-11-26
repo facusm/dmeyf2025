@@ -24,49 +24,6 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
-def mejor_umbral_probabilidad(y_pred, weights, ganancia_acierto=None, costo_estimulo=None):
-    """
-    Encuentra el umbral de probabilidad óptimo que maximiza la ganancia.
-    """
-    ganancia_acierto = ganancia_acierto or GANANCIA_ACIERTO
-    costo_estimulo = costo_estimulo or COSTO_ESTIMULO
-
-    # Filtrar valores finitos
-    mask = np.isfinite(y_pred)
-    y_pred = np.array(y_pred)[mask]
-    weights = np.array(weights)[mask]
-
-    # Ordenar por probabilidad descendente
-    orden = np.argsort(y_pred)[::-1]
-    y_pred_sorted = y_pred[orden]
-    weights_sorted = weights[orden]
-
-    # Ganancia NETA por envío
-    ganancias = np.where(
-        weights_sorted == 1.00002,
-        ganancia_acierto - abs(costo_estimulo),
-        -abs(costo_estimulo),
-    )
-
-    gan_acum = np.cumsum(ganancias)
-
-    if len(gan_acum) == 0:
-        return 0, 0, 0, ([], [], [])
-
-    # Buscamos el máximo en el top 70% para evitar colas ruidosas
-    limite_busqueda = int(len(gan_acum) * 0.7)
-    idx_max = np.argmax(gan_acum[:limite_busqueda])
-
-    ganancia_max = gan_acum[idx_max]
-    N_optimo = idx_max + 1
-    umbral_optimo = y_pred_sorted[idx_max]
-
-    ns = list(range(1, len(gan_acum) + 1))
-    umbrales = list(y_pred_sorted)
-
-    return umbral_optimo, N_optimo, ganancia_max, (ns, gan_acum, umbrales)
-
-
 def aplicar_undersampling(
     data,
     target_col="clase_ternaria",

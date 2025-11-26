@@ -164,7 +164,7 @@ def main():
 
 
 
-    # 4️⃣ Entrenamiento modelos para validación externa (APO sobre 202107)
+    # 4️⃣ Entrenamiento modelos para validación externa (APO sobre mes de validación externa)
     logger.info("\n🌱 Entrenando modelos para validación externa (APO)...")
     entrenar_modelos_val_externa(
         X_train_inicial,
@@ -186,6 +186,7 @@ def main():
         model_dir=MODEL_DIR_VAL_EXT,
         ksem=APO_K_SEM,
         n_apo=APO_N_APO,
+        num_boost_round=best_iter,
     )
 
     logger.info(f"🎯 N óptimo APO (valid_ext {MES_VALID_EXT[0]}): {N_opt_APO}")

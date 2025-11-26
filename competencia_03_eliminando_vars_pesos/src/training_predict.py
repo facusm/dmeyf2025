@@ -61,7 +61,7 @@ def entrenar_ensemble_test_final(
         params_seed = params.copy()
         params_seed["seed"] = seed
 
-        model_path = os.path.join(model_dir, f"lgbm_testfinal_seed_{seed}.txt")
+        model_path = os.path.join(model_dir, f"lgbm_testfinal_seed_{seed}_it{num_boost_round}.txt")
 
         if os.path.exists(model_path):
             # ♻️ Reutilizar modelo ya entrenado
@@ -76,8 +76,6 @@ def entrenar_ensemble_test_final(
                 params_seed,
                 dtrain,
                 num_boost_round=num_boost_round,
-                valid_sets=[],
-                verbose_eval=False,
             )
 
             if guardar_modelos:
@@ -85,7 +83,7 @@ def entrenar_ensemble_test_final(
                 logger.info(f"💾 Modelo FINAL test guardado en: {model_path}")
 
         # Predicciones en test para esta seed
-        preds_test.append(model.predict(X_test))
+        preds_test.append(model.predict(X_test, num_iteration=num_boost_round))
 
     # ============================
     # 🌐 Ensemble (promedio) en test
