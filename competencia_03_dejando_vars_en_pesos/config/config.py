@@ -154,7 +154,7 @@ for path in [EXPERIMENT_DIR, DB_PATH, MODELOS_PATH, LOGS_PATH, RESULTADOS_PREDIC
 # Semillerio para APO (validación externa)
 SEMILLAS_APO = SEMILLAS_ENSEMBLE[:100]   # por ej: 100 seeds para APO
 APO_K_SEM = 10                          # 10 seeds por APO
-APO_N_APO = 100                         # 100 repes  →  10×10=100
+APO_N_APO = 10                          # 10 repes → 10×10=100 semillas ✅
 # TOTAL semillas usadas en APO: APO_K_SEM * APO_N_APO  (ej: 10 * 10 = 100)
 
 

@@ -131,40 +131,21 @@ def crear_estudio_optuna(seed, load_if_exists=True):
     return study
 
 
-def get_boosting_schedule(n_train: int) -> tuple[int, int]:
-    """
-    Define num_boost_round y early_stopping_rounds según el tamaño efectivo del train.
-    Mantiene suficiente techo para learning rates chicos.
-    Ajustá cortes si hace falta, pero la lógica es esta.
-    """
-    if n_train >= 4_000_000:
-        max_rounds = 4000
-        es_rounds = 200
-    elif n_train >= 1_000_000:
-        max_rounds = 3000
-        es_rounds = 150
-    elif n_train >= 300_000:
-        max_rounds = 2000
-        es_rounds = 100
-    else:
-        max_rounds = 1000
-        es_rounds = 80
 
-    return max_rounds, es_rounds
-
-
-
-def suggest_params(trial, n_train: int, base: dict) -> dict:
+def suggest_params(trial, n_train: int, base: dict) -> tuple[dict, int]:
     params = base.copy()
+
+    # num_iterations ~ 2^U(0, 11.1)  (≈ 1 .. 2200)
+    it_exp = trial.suggest_float("num_iterations_exp", 0.0, 11.1)
+    num_boost_round = int(np.round(2.0 ** it_exp))
 
     lr_exp = trial.suggest_float("lr_exp", -8.0, -2.0)
     params["learning_rate"] = float(2.0 ** lr_exp)
 
-    leaves_pow = trial.suggest_int("num_leaves_pow", 4, 10)  # 16..1024
+    leaves_pow = trial.suggest_int("num_leaves_pow", 4, 10)
     num_leaves = int(2 ** leaves_pow)
     params["num_leaves"] = num_leaves
 
-    # cota tipo APO: min_data_in_leaf <= n_train / num_leaves
     max_leaf = max(2, n_train // max(2, num_leaves))
     max_pow = int(np.floor(np.log2(max_leaf)))
     leaf_pow = trial.suggest_int("min_data_in_leaf_pow", 0, max_pow)
@@ -178,62 +159,64 @@ def suggest_params(trial, n_train: int, base: dict) -> dict:
         "lambda_l2": float(trial.suggest_float("lambda_l2", 1e-4, 50.0, log=True)),
     })
 
+    return params, num_boost_round
 
-    return params
 
 
 def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semilleros):
+    """Objetivo de Optuna: maximizar ganancia_meseta promedio."""
     n_train = X_train.shape[0]
+    
+    # 1) Sugerir hiperparámetros
 
-    # 1) Sugerir HP al estilo APO (y guardar el dict real que sirve para reentrenar)
-    params_base = suggest_params(trial, n_train, LGBM_PARAMS_BASE)
+    params_base, num_boost_round = suggest_params(trial, n_train, LGBM_PARAMS_BASE)
 
-    # Guardá el dict REAL de LGBM (sin seed) para reutilizar en main
     trial.set_user_attr("lgb_params", params_base)
-
-    # 2) Schedule de boosting
-    num_boost_round, early_stopping_rounds = get_boosting_schedule(n_train)
-
+    trial.set_user_attr("best_iter", int(num_boost_round))        # para tu main.py
+    trial.set_user_attr("num_boost_round", int(num_boost_round))  # opcional
+    
+  
+    
     dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train)
     dvalid = lgb.Dataset(X_valid, label=y_valid, weight=w_valid)
-
-    # 3) Repeticiones (repes)
+    
+    # 3) Repeticiones con semillas
     semilleros = np.asarray(list(semilleros), dtype=int)
     total_seeds = len(semilleros)
+    
     if total_seeds == 0:
         logger.warning("⚠️ semilleros vacío.")
         return 0.0
-
+    
     n_repe = max(1, int(N_REPE_OPTUNA))
-    n_repe = min(n_repe, total_seeds)  # evita repes > seeds
-
-    # 🔀 Barajado reproducible por trial (para no usar siempre los mismos bloques)
+    n_repe = min(n_repe, total_seeds)
+    
+    # Barajado reproducible por trial
     rng = np.random.default_rng(10_000 + int(trial.number))
     semilleros_perm = rng.permutation(semilleros)
-
-    # ✅ Partición que USA TODAS las seeds (no pierde el resto)
     bloques = np.array_split(semilleros_perm, n_repe)
-
+    
     ganancias_repes = []
     umbrales_repes = []
     N_opts_repes = []
-    best_iters_repes = []
-
+    # ✅ Ya NO trackeas best_iters
+    
     logger.info(f"🧪 Trial {trial.number} | total_seeds={total_seeds}, repe={n_repe}")
-
+    
     for r, semillas_repe in enumerate(bloques, start=1):
         if len(semillas_repe) == 0:
             continue
-
+        
         sum_preds_valid = np.zeros(X_valid.shape[0], dtype=float)
-        best_iters_this_repe = []
-
-        logger.info(f"   🔁 Repe {r}/{n_repe} | seeds usadas: {len(semillas_repe)}")
-
+        # ✅ Ya NO creas best_iters_this_repe
+        
+        logger.info(f"   🔁 Repe {r}/{n_repe} | seeds: {len(semillas_repe)}")
+        
         for seed in semillas_repe:
             params = params_base.copy()
             params["seed"] = int(seed)
-
+            
+            # ✅ SIN early stopping
             model = lgb.train(
                 params,
                 dtrain,
@@ -241,56 +224,53 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
                 feval=lgb_gan_eval,
                 num_boost_round=num_boost_round,
                 callbacks=[
-                    lgb.early_stopping(early_stopping_rounds, verbose=False),
                     lgb.log_evaluation(period=0),
                 ],
             )
+            
+            # ✅ Usar todas las iteraciones directamente
+            sum_preds_valid += model.predict(X_valid, num_iteration=num_boost_round)
 
-            bi = int(model.best_iteration) if model.best_iteration is not None else num_boost_round
-            best_iters_this_repe.append(bi)
-
-            sum_preds_valid += model.predict(X_valid, num_iteration=bi)
-
+        
         y_pred_ensemble = sum_preds_valid / float(len(semillas_repe))
-
+        
         umbral_r, N_opt_r, ganancia_r = calcular_umbral_y_ganancia_meseta(
             y_pred=y_pred_ensemble,
             weight=w_valid,
         )
-
+        
         ganancias_repes.append(float(ganancia_r))
         umbrales_repes.append(float(umbral_r))
         N_opts_repes.append(int(N_opt_r))
-        best_iters_repes.append(float(np.mean(best_iters_this_repe)))
-
+        # ✅ Ya NO agregas best_iters
+        
         logger.info(
             f"   ✅ Repe {r}/{n_repe} | Ganancia meseta: ${ganancia_r:,.0f} | "
             f"N_opt: {N_opt_r:,} | umbral: {umbral_r:.6f}"
         )
-
+    
     if not ganancias_repes:
         logger.warning("⚠️ No se pudo calcular ganancia en ninguna repetición.")
         return 0.0
-
+    
     ganancia_prom = float(np.mean(ganancias_repes))
-    best_iter_prom = int(np.round(np.mean(best_iters_repes)))
-
     idx_best_repe = int(np.argmax(ganancias_repes))
     umbral_ens = float(umbrales_repes[idx_best_repe])
     N_opt_ens = int(N_opts_repes[idx_best_repe])
-
+    # ✅ Ya NO calculas best_iter_prom
+    
     trial.set_user_attr("ganancia_ensemble", ganancia_prom)
     trial.set_user_attr("ganancias_repes", ganancias_repes)
     trial.set_user_attr("umbral_ensemble", umbral_ens)
     trial.set_user_attr("N_opt_ensemble", N_opt_ens)
-    trial.set_user_attr("best_iter", best_iter_prom)
+    trial.set_user_attr("best_iter", num_boost_round)  # ✅ Siempre es num_boost_round
     trial.set_user_attr("n_train", int(n_train))
-
+    
     logger.info(
         f"✅ Trial {trial.number} COMPLETADO | Ganancia promedio meseta ({n_repe} repes): "
         f"${ganancia_prom:,.0f}"
     )
-
+    
     return ganancia_prom
 
 
