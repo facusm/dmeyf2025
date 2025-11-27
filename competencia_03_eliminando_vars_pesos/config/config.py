@@ -2,6 +2,8 @@
 import os
 from datetime import datetime
 
+
+
 # ==================================================================================
 # PATHS BASE
 # ==================================================================================
@@ -206,7 +208,7 @@ LGBM_PARAMS_BASE = {
     "max_depth": -1,
     "max_bin": 31,
     "lambda_l1": 0.0,
-    "num_threads": 1, # Dejarlo en 1 para evitar problemas en entornos compartidos
+    "num_threads": -1,                 # usar todos los núcleos disponibles
 }
 
 
