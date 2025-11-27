@@ -232,9 +232,6 @@ def objective(trial, X_train, y_train, w_train, X_valid, y_valid, w_valid, semil
     return ganancia_prom
 
 
-
-
-
 def ejecutar_optimizacion(
     X_train,
     y_train,
@@ -259,6 +256,11 @@ def ejecutar_optimizacion(
     restantes = n_trials - completados
     if restantes > 0:
         logger.info(f"🚀 Ejecutando {restantes} trials adicionales...")
+
+        # 🔥 HABILITAMOS EL LOGGING AUTOMÁTICO DE OPTUNA
+        optuna.logging.enable_default_handler()
+        optuna.logging.set_verbosity(optuna.logging.INFO)
+
         study.optimize(
             lambda trial: objective(
                 trial,

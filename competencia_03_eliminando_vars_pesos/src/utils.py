@@ -104,7 +104,12 @@ def aplicar_undersampling(
     logger.info(f"📄 Log de undersampling guardado en: {csv_path}")
 
     # 6️⃣ Distribución post-undersampling
-    distrib = df_final[target_col].value_counts(normalize=True).round(3).to_dict()
+    distrib = (
+        df_final.groupby(id_col)[target_col].first()
+        .value_counts(normalize=True)
+        .round(3)
+        .to_dict()
+    )
     logger.info(f"📊 Distribución post-undersampling (frecuencias relativas): {distrib}")
 
     return df_final
