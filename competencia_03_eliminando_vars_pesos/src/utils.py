@@ -104,8 +104,13 @@ def aplicar_undersampling(
     logger.info(f"📄 Log de undersampling guardado en: {csv_path}")
 
     # 6️⃣ Distribución post-undersampling
+    # Mapeo de prioridades
+    prioridad = {"BAJA+2": 3, "BAJA+1": 2, "CONTINUA": 1}
+
     distrib = (
-        df_final.groupby(id_col)[target_col].first()
+        df_final.assign(prio=df_final[target_col].map(prioridad))
+        .sort_values(["numero_de_cliente", "prio"], ascending=[True, False])
+        .drop_duplicates("numero_de_cliente")[target_col]
         .value_counts(normalize=True)
         .round(3)
         .to_dict()
