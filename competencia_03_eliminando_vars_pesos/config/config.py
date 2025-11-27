@@ -134,7 +134,7 @@ NOMBRE_EXPERIMENTO = build_experiment_name()
 # ESTRUCTURA DE SALIDAS POR EXPERIMENTO
 # ==================================================================================
 
-EXPERIMENTS_ROOT = os.path.join(BUCKET_PATH_b1, "competencia_02")
+EXPERIMENTS_ROOT = os.path.join(BUCKET_PATH_b1, FILE_BASE)
 os.makedirs(EXPERIMENTS_ROOT, exist_ok=True)
 
 EXPERIMENT_DIR = os.path.join(EXPERIMENTS_ROOT, NOMBRE_EXPERIMENTO)
