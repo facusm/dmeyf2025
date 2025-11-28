@@ -493,8 +493,8 @@ def feature_engineering_min_max(
 def feature_engineering_ratios(df: pd.DataFrame, ratio_pairs: list[tuple[str, str]]) -> pd.DataFrame:
     """
     Genera columnas de ratios entre pares válidos de columnas.
-    Maneja NULL y división por cero.
-    - Quotea columnas para soportar mayúsculas.
+    - Si numerador es NULL -> ratio NULL
+    - Si denominador es NULL o 0 -> ratio NULL
     """
     if not ratio_pairs:
         logger.warning("No se especificaron pares de columnas para generar ratios")
@@ -514,7 +514,14 @@ def feature_engineering_ratios(df: pd.DataFrame, ratio_pairs: list[tuple[str, st
         q_num = _qident(numerador)
         q_den = _qident(denominador)
         q_ratio = _qident(ratio_col)
-        sql += f", (1.0 * {q_num}) / NULLIF({q_den}, 0) AS {q_ratio}"
+
+        sql += f""",
+            CASE
+              WHEN {q_num} IS NULL THEN NULL
+              WHEN {q_den} IS NULL OR {q_den} = 0 THEN NULL
+              ELSE (1.0 * {q_num}) / {q_den}
+            END AS {q_ratio}
+        """
 
     sql += " FROM df"
 
@@ -527,6 +534,7 @@ def feature_engineering_ratios(df: pd.DataFrame, ratio_pairs: list[tuple[str, st
 
     logger.info(f"Ratios generados. DataFrame resultante con {df_out.shape[1]} columnas")
     return df_out
+
 
 
 def feature_engineering_medias_moviles_lag(df: pd.DataFrame, columnas: list[str], window_size: int = 2) -> pd.DataFrame:

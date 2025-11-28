@@ -252,42 +252,7 @@ def main():
     logger.info(f"📌 atributos_no_pesos: {len(atributos_no_pesos)} | atributos_pesos: {len(atributos_pesos)}")
 
     # ===========================
-    # 03. Drift features SOLO pesos => genera *_rz_mes
-    # ===========================
-    # 03. Drift features SOLO pesos => genera *_rz_mes
-    if atributos_pesos:
-        logger.info("💸 Generando drift-features monetarias: creando *_rz_mes")
-        df = agregar_drift_features_monetarias(df, atributos_pesos)
-
-        # ✅ Drop de montos nominales para no reintroducir drift + bajar columnas/RAM
-        cols_drop = [c for c in atributos_pesos if c in df.columns]
-        logger.info(f"🧹 Dropeando montos nominales en pesos: {len(cols_drop)} columnas (se conserva *_rz_mes)")
-        df.drop(columns=cols_drop, inplace=True, errors="ignore")
-    else:
-        logger.info("ℹ️ No hay atributos_pesos presentes; no se crea *_rz_mes ni se dropean nominales.")
-
-    logger.info(f"📐 Dataset luego de drift+drop nominales: shape={df.shape}")
-
-
-    # ===========================
-    # 04. FE TEMPORAL (lags/deltas/MA/shock)
-    # ===========================
-    atributos_temporales = atributos_no_pesos + [
-        f"{c}_rz_mes" for c in atributos_pesos if f"{c}_rz_mes" in df.columns
-    ]
-
-    cant_lag = 3
-    window_size_ma = 3
-
-    logger.info("🔧 Iniciando feature engineering temporal...")
-    df_fe = feature_engineering_lag(df, columnas=atributos_temporales, cant_lag=cant_lag)
-    df_fe = feature_engineering_deltas(df_fe, columnas=atributos_temporales, cant_lag=cant_lag)
-    df_fe = feature_engineering_medias_moviles(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
-    df_fe = feature_engineering_medias_moviles_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
-    df_fe = generar_shock_relativo_delta_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
-
-    # ===========================
-    # 05. FE NO TEMPORAL (ratios / cumsum / minmax / aguinaldo)
+    # 03. RATIOS (ANTES de dropear nominales)
     # ===========================
     ratio_pairs = [
         ("Master_msaldototal", "Master_mlimitecompra"),
@@ -308,8 +273,56 @@ def main():
         ("mcomisiones", "mrentabilidad"),
         ("chomebanking_transacciones", "ctrx_quarter"),
     ]
-    ratio_pairs = [(a, b) for (a, b) in ratio_pairs if a in df_fe.columns and b in df_fe.columns]
+    ratio_pairs = [(a, b) for (a, b) in ratio_pairs if a in df.columns and b in df.columns]
 
+    logger.info(f"➗ Generando ratios NOMINALES antes de drift+drop: {len(ratio_pairs)} pares válidos")
+    df = feature_engineering_ratios(df, ratio_pairs=ratio_pairs)
+
+    ratio_cols = [f"{a}_over_{b}" for (a, b) in ratio_pairs]
+    ratio_cols = [c for c in ratio_cols if c in df.columns]
+    logger.info(f"✅ Ratios nominales generados: {len(ratio_cols)}")
+
+    # ===========================
+    # 04. Drift features SOLO pesos => genera *_rz_mes
+    # ===========================
+    if atributos_pesos:
+        logger.info("💸 Generando drift-features monetarias: creando *_rz_mes")
+        df = agregar_drift_features_monetarias(df, atributos_pesos)
+
+        # ✅ Drop de montos nominales (pero NO afecta ratios ya creados)
+        cols_drop = [c for c in atributos_pesos if c in df.columns]
+        logger.info(f"🧹 Dropeando montos nominales en pesos: {len(cols_drop)} columnas (se conserva *_rz_mes y ratios)")
+        df.drop(columns=cols_drop, inplace=True, errors="ignore")
+    else:
+        logger.info("ℹ️ No hay atributos_pesos presentes; no se crea *_rz_mes ni se dropean nominales.")
+
+    logger.info(f"📐 Dataset luego de drift+drop nominales: shape={df.shape}")
+
+    # ===========================
+    # 05. FE TEMPORAL (lags/deltas/MA/shock) INCLUYE RATIOS
+    # ===========================
+    rz_cols = [f"{c}_rz_mes" for c in atributos_pesos if f"{c}_rz_mes" in df.columns]
+
+    atributos_temporales = atributos_no_pesos + rz_cols + ratio_cols
+    atributos_temporales = [c for c in dict.fromkeys(atributos_temporales) if c in df.columns]  # unique + existe
+
+    cant_lag = 3
+    window_size_ma = 3
+
+    logger.info(
+        f"🔧 FE temporal sobre {len(atributos_temporales)} columnas "
+        f"(no_pesos={len(atributos_no_pesos)}, rz={len(rz_cols)}, ratios={len(ratio_cols)})"
+    )
+
+    df_fe = feature_engineering_lag(df, columnas=atributos_temporales, cant_lag=cant_lag)
+    df_fe = feature_engineering_deltas(df_fe, columnas=atributos_temporales, cant_lag=cant_lag)
+    df_fe = feature_engineering_medias_moviles(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+    df_fe = feature_engineering_medias_moviles_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+    df_fe = generar_shock_relativo_delta_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+
+    # ===========================
+    # 06. FE NO TEMPORAL (cumsum / minmax / aguinaldo)
+    # ===========================
     cumsum_cols = [
         "ctrx_quarter", "cpayroll_trx", "cpayroll2_trx",
         "chomebanking_transacciones", "ccallcenter_transacciones",
@@ -318,19 +331,18 @@ def main():
     ]
     cumsum_cols = [c for c in cumsum_cols if c in df_fe.columns]
 
-    # min/max sobre rz_mes (desinflado por mes)
-    minmax_cols_corr = [f"{c}_rz_mes" for c in atributos_pesos if f"{c}_rz_mes" in df_fe.columns]
+    minmax_cols_corr = [c for c in rz_cols if c in df_fe.columns]
 
     WINDOW_STATS = 6
-    STRICT = False  # si quisieras exigir ventana completa, ponelo en True
+    STRICT = False
 
-    logger.info("🔧 Iniciando feature engineering no-temporal (ratios/cumsum/minmax)...")
-    df_fe = feature_engineering_ratios(df_fe, ratio_pairs=ratio_pairs)
+    logger.info("🔧 Iniciando feature engineering no-temporal (cumsum/minmax/aguinaldo)...")
     df_fe = feature_engineering_cum_sum(df_fe, columnas=cumsum_cols, window_size=WINDOW_STATS, strict=STRICT)
     df_fe = feature_engineering_min_max(df_fe, columnas=minmax_cols_corr, window_size=WINDOW_STATS, strict=STRICT)
     df_fe = crear_indicador_aguinaldo(df_fe)
 
     logger.info(f"✅ Feature engineering finalizado. Forma resultante: {df_fe.shape}")
+
 
     # ===========================
     # 06. GUARDAR PARQUET
