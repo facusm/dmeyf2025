@@ -2,6 +2,8 @@
 import os
 from datetime import datetime
 
+
+
 # ==================================================================================
 # PATHS BASE
 # ==================================================================================
@@ -57,13 +59,13 @@ MES_TEST_FINAL = [202109]
 
 # Semillas para Optuna 
 SEMILLAS_OPTUNA = [
-    306491, 336251, 900577, 182009, 182011, 182027, 800089
+    306491
 ]
 
 # Número de repeticiones (BO "repe" estilo APO)
 N_REPE_OPTUNA = 1  
 
-# Semillas para ensemble final: 7 (Optuna) + 93 = 100 en total, todas primas
+# Semillas para ensemble final: 1 (Optuna) + 99 = 100 en total, todas primas
 SEMILLAS_ENSEMBLE = SEMILLAS_OPTUNA + [
     100003, 100019, 100043, 100049, 100057, 100069, 100103, 100109, 100129, 100151,
     100153, 100169, 100183, 100189, 100193, 100207, 100213, 100237, 100267, 100271,
@@ -74,7 +76,7 @@ SEMILLAS_ENSEMBLE = SEMILLAS_OPTUNA + [
     100741, 100747, 100769, 100787, 100799, 100801, 100811, 100823, 100829, 100847,
     100853, 100907, 100913, 100927, 100931, 100937, 100943, 100957, 100981, 100987,
     100999, 101009, 101021, 101027, 101051, 101063, 101081, 101089, 101107, 101111,
-    101113, 101117, 101119
+    101113, 101117, 101119, 336251, 900577, 182009, 182011, 182027, 800089
 ] # Poner 100 semillas en total para que coincida con APO_K_SEM * APO_N_APO si se usa APO
 
 
@@ -134,7 +136,7 @@ NOMBRE_EXPERIMENTO = build_experiment_name()
 # ESTRUCTURA DE SALIDAS POR EXPERIMENTO
 # ==================================================================================
 
-EXPERIMENTS_ROOT = os.path.join(BUCKET_PATH_b1, "competencia_02")
+EXPERIMENTS_ROOT = os.path.join(BUCKET_PATH_b1, FILE_BASE)
 os.makedirs(EXPERIMENTS_ROOT, exist_ok=True)
 
 EXPERIMENT_DIR = os.path.join(EXPERIMENTS_ROOT, NOMBRE_EXPERIMENTO)
@@ -159,7 +161,7 @@ APO_N_APO = 10                          # 10 repes → 10×10=100 semillas ✅
 
 
 # Lista de N candidatos (cantidad de envíos) a evaluar
-APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500]  # adaptalo a tu caso
+APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500, 13000]  # adaptalo a tu caso
 
 # Carpeta donde se guardan los modelos entrenados SOLO para validación externa
 MODEL_DIR_VAL_EXT = os.path.join(EXPERIMENT_DIR, "modelos_val_ext")
@@ -206,7 +208,7 @@ LGBM_PARAMS_BASE = {
     "max_depth": -1,
     "max_bin": 31,
     "lambda_l1": 0.0,
-    "num_threads": -1,
+    "num_threads": -1,                 # usar todos los núcleos disponibles
 }
 
 

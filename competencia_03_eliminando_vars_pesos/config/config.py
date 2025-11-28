@@ -161,7 +161,7 @@ APO_N_APO = 10                          # 10 repes → 10×10=100 semillas ✅
 
 
 # Lista de N candidatos (cantidad de envíos) a evaluar
-APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500]  # adaptalo a tu caso
+APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500, 13000]  # adaptalo a tu caso
 
 # Carpeta donde se guardan los modelos entrenados SOLO para validación externa
 MODEL_DIR_VAL_EXT = os.path.join(EXPERIMENT_DIR, "modelos_val_ext")
