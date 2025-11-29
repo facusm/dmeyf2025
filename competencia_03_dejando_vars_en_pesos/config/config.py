@@ -57,6 +57,7 @@ MESES_TRAIN_COMPLETO_PARA_TEST_FINAL = MESES_TRAIN_PARA_VAL_EXT + [202106] + MES
 # Test final (podés correr ambos escenarios separados con el mismo experimento)
 MES_TEST_FINAL = [202109]
 
+SEMILLAS_TOTALES = 30  # Número total de semillas disponibles
 # Semillas para Optuna 
 SEMILLAS_OPTUNA = [
     306491
@@ -79,6 +80,7 @@ SEMILLAS_ENSEMBLE = SEMILLAS_OPTUNA + [
     101113, 101117, 101119, 336251, 900577, 182009, 182011, 182027, 800089
 ] # Poner 100 semillas en total para que coincida con APO_K_SEM * APO_N_APO si se usa APO
 
+SEMILLAS_ENSEMBLE = SEMILLAS_ENSEMBLE[:SEMILLAS_TOTALES]  
 
 # ==================================================================================
 # UNDERSAMPLING
@@ -154,10 +156,10 @@ for path in [EXPERIMENT_DIR, DB_PATH, MODELOS_PATH, LOGS_PATH, RESULTADOS_PREDIC
 # ==================================================================================
 
 # Semillerio para APO (validación externa)
-SEMILLAS_APO = SEMILLAS_ENSEMBLE[:100]   # por ej: 100 seeds para APO
-APO_K_SEM = 10                          # 10 seeds por APO
-APO_N_APO = 10                          # 10 repes → 10×10=100 semillas ✅
-# TOTAL semillas usadas en APO: APO_K_SEM * APO_N_APO  (ej: 10 * 10 = 100)
+SEMILLAS_APO = SEMILLAS_ENSEMBLE   # por ej: 30 seeds para APO
+APO_K_SEM = 6                          # 6 seeds por APO
+APO_N_APO = 5                          # 5 repes
+
 
 
 # Lista de N candidatos (cantidad de envíos) a evaluar
