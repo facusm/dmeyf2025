@@ -7,13 +7,195 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+import duckdb
+import numpy as np
+import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 
 def _qident(col: str) -> str:
-    """
-    Quotea un identificador SQL de forma segura para DuckDB: "col".
-    Si el nombre tuviera comillas dobles, las escapa.
-    """
     return f'"{col.replace(chr(34), chr(34)*2)}"'
+
+def detectar_variables_rotas_por_mes(
+    df: pd.DataFrame,
+    columnas: list[str] | None = None,
+    id_col: str = "numero_de_cliente",
+    mes_col: str = "foto_mes",
+    strict: bool = True,
+) -> dict[int, list[str]]:
+    """
+    Variable "rota" en mes m si para TODOS los clientes en ese mes:
+      - (def) todos los valores son 0.
+    Si strict=True además exige: no haya NULLs en ese mes para esa variable.
+      (Así evitás marcar como "rota" un mes donde está todo NULL.)
+    """
+
+    if columnas is None:
+        columnas = list(df.columns)
+
+    cols = [c for c in columnas if c not in (id_col, mes_col)]
+    if not cols:
+        return {}
+
+    # Nombres auxiliares (para no chocar con columnas reales)
+    alias_max = {c: f"__maxabs__{c}" for c in cols}
+    alias_nulls = {c: f"__nulls__{c}" for c in cols}
+
+    cast_exprs = ",\n".join(
+        f"TRY_CAST({_qident(c)} AS DOUBLE) AS {_qident(c)}" for c in cols
+    )
+    maxabs_exprs = ",\n".join(
+        f"MAX(ABS(COALESCE({_qident(c)}, 0))) AS {_qident(alias_max[c])}" for c in cols
+    )
+    nulls_exprs = ",\n".join(
+        f"SUM(CASE WHEN {_qident(c)} IS NULL THEN 1 ELSE 0 END) AS {_qident(alias_nulls[c])}" for c in cols
+    )
+
+    query = f"""
+    WITH t AS (
+      SELECT
+        TRY_CAST({_qident(mes_col)} AS BIGINT) AS mes,
+        {cast_exprs}
+      FROM df
+    ),
+    agg AS (
+      SELECT
+        mes,
+        COUNT(*) AS n,
+        {maxabs_exprs},
+        {nulls_exprs}
+      FROM t
+      GROUP BY mes
+    )
+    SELECT * FROM agg
+    ORDER BY mes
+    """
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.register("df", df)
+        out = con.execute(query).df()
+    finally:
+        con.close()
+
+    rotos: dict[int, list[str]] = {}
+    for _, row in out.iterrows():
+        mes = int(row["mes"])
+        n = int(row["n"])
+        bad_cols = []
+
+        for c in cols:
+            maxabs = row[alias_max[c]]
+            nulls = int(row[alias_nulls[c]])
+
+            # maxabs==0 => todos los valores numéricos (o NULL->0 por COALESCE) son 0
+            if maxabs == 0:
+                if strict:
+                    # estricta: no permito NULLs; evita "mes todo NULL" marcado como roto
+                    if nulls == 0:
+                        bad_cols.append(c)
+                else:
+                    # relajada: permito NULLs (tratados como 0 en maxabs)
+                    # si querés evitar "todo NULL" incluso en relaxed, descomentá:
+                    # if nulls < n:
+                    bad_cols.append(c)
+
+        if bad_cols:
+            rotos[mes] = bad_cols
+
+    return rotos
+
+
+def feature_engineering_tendencia(
+    df: pd.DataFrame,
+    columnas: list[str],
+    window_size: int = 6,
+    id_col: str = "numero_de_cliente",
+    mes_col: str = "foto_mes",
+    include_current: bool = True,
+) -> pd.DataFrame:
+    """
+    Genera tendencia (pendiente) por cliente para cada columna usando REGR_SLOPE en DuckDB.
+
+    - x = row_number() por cliente (equivalente a usar 1..k dentro de la ventana, salvo corrimiento).
+    - Incluye NULLs: REGR_SLOPE ignora pares donde y es NULL.
+    - Devuelve NULL si hay menos de 2 valores no-null en la ventana (como tu C: libre > 1)
+    - Ventana:
+        * include_current=True  -> últimos window_size incluyendo el mes actual
+        * include_current=False -> últimos window_size previos (sin incluir el actual)
+    """
+    logger.info(
+        f"Generando tendencia (regr_slope) con ventana {window_size} "
+        f"({'incluye' if include_current else 'excluye'} mes actual) para {len(columnas) if columnas else 0} columnas"
+    )
+
+    if not columnas:
+        return df
+
+    # frame window
+    if include_current:
+        frame = f"ROWS BETWEEN {window_size - 1} PRECEDING AND CURRENT ROW"
+    else:
+        frame = f"ROWS BETWEEN {window_size} PRECEDING AND 1 PRECEDING"
+
+    sql = """
+    WITH base AS (
+      SELECT
+        *,
+        ROW_NUMBER() OVER (
+          PARTITION BY {q_id}
+          ORDER BY {q_mes}
+        ) AS rn
+      FROM df
+    )
+    SELECT
+      base.*
+    """.format(q_id=_qident(id_col), q_mes=_qident(mes_col))
+
+    for col in columnas:
+        if col not in df.columns:
+            logger.warning(f"[trend] La columna {col} no existe, se omite")
+            continue
+
+        out_col = f"{col}_trend_{window_size}"
+        if out_col in df.columns:
+            logger.warning(f"[trend] {out_col} ya existe, no se vuelve a generar")
+            continue
+
+        q_col = _qident(col)
+        q_out = _qident(out_col)
+
+        # >=2 valores no-null en ventana, si no -> NULL (similar a libre > 1)
+        sql += f""",
+      CASE
+        WHEN COUNT({q_col}) OVER (
+          PARTITION BY {_qident(id_col)}
+          ORDER BY {_qident(mes_col)}
+          {frame}
+        ) > 1
+        THEN REGR_SLOPE({q_col}, rn) OVER (
+          PARTITION BY {_qident(id_col)}
+          ORDER BY {_qident(mes_col)}
+          {frame}
+        )
+        ELSE NULL
+      END AS {q_out}
+        """
+
+    sql += "\nFROM base"
+
+    con = duckdb.connect(":memory:")
+    try:
+        con.register("df", df)
+        df_out = con.execute(sql).df()
+    finally:
+        con.close()
+
+    logger.info(f"Tendencias generadas. DataFrame resultante con {df_out.shape[1]} columnas")
+    return df_out
 
 
 def pisar_con_mes_anterior_duckdb(

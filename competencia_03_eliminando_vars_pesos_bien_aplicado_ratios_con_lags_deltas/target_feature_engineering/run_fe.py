@@ -1,5 +1,6 @@
 # run_fe.py  
 
+import numpy as np
 import pandas as pd
 import os
 import datetime
@@ -19,6 +20,8 @@ from .features import (
     feature_engineering_medias_moviles_lag,
     generar_shock_relativo_delta_lag,
     crear_indicador_aguinaldo,
+    feature_engineering_tendencia,
+    detectar_variables_rotas_por_mes,
 )
 
 from config.config import (
@@ -75,129 +78,6 @@ VARIABLES_PESOS = [
 ]
 
 
-# ===========================
-# HELPERS LOCF / FLAGS
-# ===========================
-def aplicar_locf_con_flags(df: pd.DataFrame) -> pd.DataFrame:
-    logger.info("🩺 Corrigiendo meses anómalos usando valores del mes anterior (LOCF con flags)...")
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="active_quarter", meses_anomalos=[202006])
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="mrentabilidad", meses_anomalos=[201905, 201910, 202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mrentabilidad_annual", meses_anomalos=[201905, 201910, 202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mcomisiones", meses_anomalos=[201905, 201910, 202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mpasivos_margen", meses_anomalos=[201905, 201910, 202006])
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="mcuentas_saldo", meses_anomalos=[202006])
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_debito_transacciones", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mautoservicio", meses_anomalos=[202006])
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_visa_transacciones", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mtarjeta_visa_consumo", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_master_transacciones", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mtarjeta_master_consumo", meses_anomalos=[202006])
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="ctarjeta_visa_debitos_automaticos", meses_anomalos=[201904])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mttarjeta_visa_debitos_automaticos", meses_anomalos=[201904])
-
-    for v in [
-        "ccajeros_propios_descuentos", "mcajeros_propios_descuentos",
-        "ctarjeta_visa_descuentos", "mtarjeta_visa_descuentos",
-        "ctarjeta_master_descuentos", "mtarjeta_master_descuentos",
-    ]:
-        df = pisar_con_mes_anterior_duckdb(
-            df, variable=v,
-            meses_anomalos=[201910, 202002, 202006, 202009, 202010, 202102]
-        )
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="ccomisiones_otras", meses_anomalos=[201905, 201910, 202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="mcomisiones_otras", meses_anomalos=[201905, 201910, 202006])
-
-    for v in [
-        "cextraccion_autoservicio", "mextraccion_autoservicio",
-        "ccheques_depositados", "mcheques_depositados",
-        "ccheques_emitidos", "mcheques_emitidos",
-        "ccheques_depositados_rechazados", "mcheques_depositados_rechazados",
-        "ccheques_emitidos_rechazados", "mcheques_emitidos_rechazados",
-    ]:
-        df = pisar_con_mes_anterior_duckdb(df, variable=v, meses_anomalos=[202006])
-
-    df = pisar_con_mes_anterior_duckdb(df, variable="tcallcenter", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="ccallcenter_transacciones", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="thomebanking", meses_anomalos=[202006])
-    df = pisar_con_mes_anterior_duckdb(df, variable="chomebanking_transacciones", meses_anomalos=[201910, 202006])
-
-    for v in [
-        "ccajas_transacciones", "ccajas_consultas", "ccajas_depositos",
-        "ccajas_extracciones", "ccajas_otras", "catm_trx", "matm",
-        "catm_trx_other", "matm_other", "ctrx_quarter",
-    ]:
-        df = pisar_con_mes_anterior_duckdb(df, variable=v, meses_anomalos=[202006])
-
-    logger.info("✅ Corrección LOCF finalizada (flags *_locf generados)")
-    return df
-
-
-def agregar_contadores_locf(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Suma total de flags LOCF y algunos contadores por familia (si existen).
-    """
-    locf_flags = [c for c in df.columns if c.endswith("_locf")]
-    df["n_locf_vars"] = df[locf_flags].sum(axis=1) if locf_flags else 0
-
-    grupos = {
-        "tarjetas_locf": [
-            "ctarjeta_visa_transacciones_locf", "mtarjeta_visa_consumo_locf",
-            "ctarjeta_master_transacciones_locf", "mtarjeta_master_consumo_locf",
-            "ctarjeta_visa_debitos_automaticos_locf", "mttarjeta_visa_debitos_automaticos_locf",
-            "ctarjeta_visa_descuentos_locf", "mtarjeta_visa_descuentos_locf",
-            "ctarjeta_master_descuentos_locf", "mtarjeta_master_descuentos_locf",
-        ],
-        "cajas_locf": [
-            "ccajas_transacciones_locf", "ccajas_consultas_locf",
-            "ccajas_depositos_locf", "ccajas_extracciones_locf", "ccajas_otras_locf",
-        ],
-        "canales_locf": [
-            "thomebanking_locf", "chomebanking_transacciones_locf",
-            "tcallcenter_locf", "ccallcenter_transacciones_locf",
-        ],
-        "atm_locf": [
-            "catm_trx_locf", "matm_locf", "catm_trx_other_locf", "matm_other_locf",
-        ],
-        "cheques_locf": [
-            "ccheques_depositados_locf", "mcheques_depositados_locf",
-            "ccheques_emitidos_locf", "mcheques_emitidos_locf",
-            "ccheques_depositados_rechazados_locf", "mcheques_depositados_rechazados_locf",
-            "ccheques_emitidos_rechazados_locf", "mcheques_emitidos_rechazados_locf",
-        ],
-        "comisiones_locf": [
-            "mcomisiones_locf", "ccomisiones_otras_locf", "mcomisiones_otras_locf",
-            "mcomisiones_mantenimiento_locf",
-        ],
-        "desc_propios_locf": [
-            "ccajeros_propios_descuentos_locf", "mcajeros_propios_descuentos_locf",
-        ],
-        "saldos_margenes_locf": [
-            "mcuentas_saldo_locf", "mpasivos_margen_locf", "mactivos_margen_locf",
-        ],
-        "rentabilidad_locf": [
-            "mrentabilidad_locf", "mrentabilidad_annual_locf",
-        ],
-        "sucursales_locf": [
-            "mautoservicio_locf",
-        ],
-        "otros_locf": [
-            "active_quarter_locf", "ctrx_quarter_locf",
-        ],
-    }
-
-    for nombre, cols in grupos.items():
-        cols_validas = [c for c in cols if c in df.columns]
-        df[nombre] = df[cols_validas].sum(axis=1) if cols_validas else 0
-
-    logger.info("🧮 Contadores LOCF agregados (n_locf_vars y familias)")
-    return df
 
 
 # ===========================
@@ -219,6 +99,16 @@ def main():
     df = pd.read_csv(path_input, compression="gzip")
     logger.info(f"✅ Dataset cargado correctamente con forma: {df.shape}")
 
+    columnas_a_chequear = df.columns
+    
+    rotos = detectar_variables_rotas_por_mes(df, columnas=columnas_a_chequear, strict=True)
+    
+    for mes, columnas in rotos.items():
+        mask = df["foto_mes"] == mes
+        df.loc[mask, columnas] = np.nan
+
+
+
     # 01.1 DROPS por poca confianza
     logger.info("🧹 Eliminando columnas con posible data drift / poco confiables...")
     df.drop(
@@ -228,11 +118,7 @@ def main():
     )
     logger.info("✅ Columnas conflictivas eliminadas (si existían)")
 
-    # 01.2 LOCF + FLAGS
-    df = aplicar_locf_con_flags(df)
 
-    # 01.3 Contadores LOCF (features estáticas)
-    df = agregar_contadores_locf(df)
 
     # ===========================
     # 02. ATRIBUTOS (no-pesos vs pesos)
@@ -314,32 +200,33 @@ def main():
         f"(no_pesos={len(atributos_no_pesos)}, rz={len(rz_cols)}, ratios={len(ratio_cols)})"
     )
 
-    df_fe = feature_engineering_lag(df, columnas=atributos_temporales, cant_lag=cant_lag)
+    df_fe = feature_engineering_tendencia(df, columnas=atributos_temporales, window_size=6)
+    df_fe = feature_engineering_lag(df_fe, columnas=atributos_temporales, cant_lag=cant_lag)
     df_fe = feature_engineering_deltas(df_fe, columnas=atributos_temporales, cant_lag=cant_lag)
-    df_fe = feature_engineering_medias_moviles(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
-    df_fe = feature_engineering_medias_moviles_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
-    df_fe = generar_shock_relativo_delta_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+    # df_fe = feature_engineering_medias_moviles(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+    # df_fe = feature_engineering_medias_moviles_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
+    # df_fe = generar_shock_relativo_delta_lag(df_fe, columnas=atributos_temporales, window_size=window_size_ma)
 
-    # ===========================
-    # 06. FE NO TEMPORAL (cumsum / minmax / aguinaldo)
-    # ===========================
-    cumsum_cols = [
-        "ctrx_quarter", "cpayroll_trx", "cpayroll2_trx",
-        "chomebanking_transacciones", "ccallcenter_transacciones",
-        "ctarjeta_debito_transacciones", "ctarjeta_visa_transacciones",
-        "ctarjeta_master_transacciones", "ccajas_transacciones",
-    ]
-    cumsum_cols = [c for c in cumsum_cols if c in df_fe.columns]
+    # # ===========================
+    # # 06. FE NO TEMPORAL (cumsum / minmax / aguinaldo)
+    # # ===========================
+    # cumsum_cols = [
+    #     "ctrx_quarter", "cpayroll_trx", "cpayroll2_trx",
+    #     "chomebanking_transacciones", "ccallcenter_transacciones",
+    #     "ctarjeta_debito_transacciones", "ctarjeta_visa_transacciones",
+    #     "ctarjeta_master_transacciones", "ccajas_transacciones",
+    # ]
+    # cumsum_cols = [c for c in cumsum_cols if c in df_fe.columns]
 
-    minmax_cols_corr = [c for c in rz_cols if c in df_fe.columns]
+    # minmax_cols_corr = [c for c in rz_cols if c in df_fe.columns]
 
-    WINDOW_STATS = 6
-    STRICT = False
+    # WINDOW_STATS = 6
+    # STRICT = False
 
-    logger.info("🔧 Iniciando feature engineering no-temporal (cumsum/minmax/aguinaldo)...")
-    df_fe = feature_engineering_cum_sum(df_fe, columnas=cumsum_cols, window_size=WINDOW_STATS, strict=STRICT)
-    df_fe = feature_engineering_min_max(df_fe, columnas=minmax_cols_corr, window_size=WINDOW_STATS, strict=STRICT)
-    df_fe = crear_indicador_aguinaldo(df_fe)
+    # logger.info("🔧 Iniciando feature engineering no-temporal (cumsum/minmax/aguinaldo)...")
+    # df_fe = feature_engineering_cum_sum(df_fe, columnas=cumsum_cols, window_size=WINDOW_STATS, strict=STRICT)
+    # df_fe = feature_engineering_min_max(df_fe, columnas=minmax_cols_corr, window_size=WINDOW_STATS, strict=STRICT)
+    # df_fe = crear_indicador_aguinaldo(df_fe)
 
     logger.info(f"✅ Feature engineering finalizado. Forma resultante: {df_fe.shape}")
 
