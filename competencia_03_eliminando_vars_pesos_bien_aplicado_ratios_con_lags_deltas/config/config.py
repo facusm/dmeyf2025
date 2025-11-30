@@ -3,7 +3,6 @@ import os
 from datetime import datetime
 
 
-
 # ==================================================================================
 # PATHS BASE
 # ==================================================================================
@@ -21,8 +20,8 @@ PROJECT_NAME = "competencia03"
 # ==================================================================================
 
 # Describí acá la variante de FE (lags, ventanas, reglas, etc.)
-SUFIJO_FE = "fe_v6"
-VERSION = "v6"
+SUFIJO_FE = "fe_v10"
+VERSION = "v10"
 
 FEATURES_ROOT = os.path.join(BUCKET_PATH_b1, "features")
 FEATURES_DIR = os.path.join(FEATURES_ROOT, SUFIJO_FE)
@@ -57,7 +56,7 @@ MESES_TRAIN_COMPLETO_PARA_TEST_FINAL = MESES_TRAIN_PARA_VAL_EXT + [202106] + MES
 # Test final (podés correr ambos escenarios separados con el mismo experimento)
 MES_TEST_FINAL = [202109]
 
-SEMILLAS_TOTALES = 30  # Número total de semillas disponibles
+SEMILLAS_TOTALES = 50  # Número total de semillas disponibles
 # Semillas para Optuna 
 SEMILLAS_OPTUNA = [
     306491
@@ -66,7 +65,7 @@ SEMILLAS_OPTUNA = [
 # Número de repeticiones (BO "repe" estilo APO)
 N_REPE_OPTUNA = 1  
 
-# Semillas para ensemble final: 1 (Optuna) + 99 = 100 en total, todas primas
+# Semillas para ensemble final:
 SEMILLAS_ENSEMBLE = SEMILLAS_OPTUNA + [
     100003, 100019, 100043, 100049, 100057, 100069, 100103, 100109, 100129, 100151,
     100153, 100169, 100183, 100189, 100193, 100207, 100213, 100237, 100267, 100271,
@@ -113,7 +112,7 @@ def build_experiment_name() -> str:
     ID único y legible del experimento:
     lgbm_{FE}_{US}_{train}_{val}_{vext}_{test}_s{n_seeds}
     """
-    n_seeds = len(SEMILLAS_OPTUNA)
+    n_seeds = len(SEMILLAS_ENSEMBLE)
 
     parts = [
         "lgbm",
@@ -156,11 +155,12 @@ for path in [EXPERIMENT_DIR, DB_PATH, MODELOS_PATH, LOGS_PATH, RESULTADOS_PREDIC
 # ==================================================================================
 
 # Semillerio para APO (validación externa)
-SEMILLAS_APO = SEMILLAS_ENSEMBLE   # por ej: 30 seeds para APO
-APO_K_SEM = 6                          # 6 seeds por APO
+SEMILLAS_APO = SEMILLAS_ENSEMBLE   # por ej: 50 seeds para APO
+APO_K_SEM = 10                          # 10 seeds por APO
 APO_N_APO = 5                          # 5 repes
 
-
+assert len(SEMILLAS_ENSEMBLE) >= APO_K_SEM * APO_N_APO, \
+    f"ERROR: Se necesitan {APO_K_SEM * APO_N_APO} semillas para APO pero solo hay {len(SEMILLAS_ENSEMBLE)}."
 
 # Lista de N candidatos (cantidad de envíos) a evaluar
 APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500, 13000]  # adaptalo a tu caso

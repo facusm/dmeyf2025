@@ -95,11 +95,14 @@ def main():
     logger.info(f"📥 Leyendo dataset crudo desde: {path_input}")
     logger.info(f"📤 Guardando dataset FE en formato Parquet: {path_output}")
 
-    # 01. CARGA
+    # 01. CARGA + CORRECCIÓN DE DATOS ROTOS
     df = pd.read_csv(path_input, compression="gzip")
     logger.info(f"✅ Dataset cargado correctamente con forma: {df.shape}")
 
-    columnas_a_chequear = df.columns
+    logger.info("🔍 Iniciando corrección de datos rotos por mes...")
+
+    excluir = {"foto_mes", "numero_de_cliente", "clase_ternaria"}
+    columnas_a_chequear = [c for c in df.columns if c not in excluir]
     
     rotos = detectar_variables_rotas_por_mes(df, columnas=columnas_a_chequear, strict=True)
     
@@ -107,19 +110,8 @@ def main():
         mask = df["foto_mes"] == mes
         df.loc[mask, columnas] = np.nan
 
-
-
-    # 01.1 DROPS por poca confianza
-    logger.info("🧹 Eliminando columnas con posible data drift / poco confiables...")
-    df.drop(
-        columns=["internet", "cpagodeservicios", "mpagodeservicios", "tmobile_app", "cmobile_app_trx"],
-        inplace=True,
-        errors="ignore",
-    )
-    logger.info("✅ Columnas conflictivas eliminadas (si existían)")
-
-
-
+    logger.info({m: len(cols) for m, cols in rotos.items()})
+    logger.info("✅ Corrección de datos rotos completada.")
     # ===========================
     # 02. ATRIBUTOS (no-pesos vs pesos)
     # ===========================
