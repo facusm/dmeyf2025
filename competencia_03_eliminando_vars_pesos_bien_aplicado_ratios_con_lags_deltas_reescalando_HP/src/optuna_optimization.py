@@ -137,49 +137,30 @@ import numpy as np
 import optuna
 
 def suggest_params(trial, n_train: int, base: dict) -> tuple[dict, int]:
-    """
-    Sugerencia de hiperparámetros con restricción forbidden al estilo R.
-    
-    Restricción: (2^min_data_in_leaf) * (2^num_leaves) <= n_train
-    Equivalente a: min_data_in_leaf + num_leaves <= log2(n_train)
-    """
     params = base.copy()
 
     # num_iterations ~ 2^U(0, 11.1)  (≈ 1 .. 2200)
     it_exp = trial.suggest_float("num_iterations_exp", 0.0, 11.1)
     num_boost_round = int(np.round(2.0 ** it_exp))
 
-    # learning_rate ~ 2^U(-8, -1)
-    lr_exp = trial.suggest_float("lr_exp", -8.0, -1.0)
+    lr_exp = trial.suggest_float("lr_exp", -8.0, -2.0)
     params["learning_rate"] = float(2.0 ** lr_exp)
 
-    # num_leaves ~ 2^U(1, 10)  (≈ 2 .. 1024 hojas)
-    leaves_pow = trial.suggest_int("num_leaves_pow", 1, 10)
+    leaves_pow = trial.suggest_int("num_leaves_pow", 4, 10)
     num_leaves = int(2 ** leaves_pow)
     params["num_leaves"] = num_leaves
 
-    # min_data_in_leaf ~ 2^U(0, log2(n_train/2))
-    max_leaf_pow = int(np.floor(np.log2(n_train / 2)))
-    leaf_pow = trial.suggest_int("min_data_in_leaf_pow", 0, max_leaf_pow)
-    min_data_in_leaf = int(2 ** leaf_pow)
-    params["min_data_in_leaf"] = min_data_in_leaf
+    max_leaf = max(2, n_train // max(2, num_leaves))
+    max_pow = int(np.floor(np.log2(max_leaf)))
+    leaf_pow = trial.suggest_int("min_data_in_leaf_pow", 0, max_pow)
+    params["min_data_in_leaf"] = int(2 ** leaf_pow)
 
-    # CONSTRAINT (forbidden): (2^leaf_pow) * (2^leaves_pow) > n_train
-    # Equivalente: leaf_pow + leaves_pow > log2(n_train)
-    if min_data_in_leaf * num_leaves > n_train:
-        raise optuna.TrialPruned(
-            f"Forbidden constraint violated: "
-            f"min_data_in_leaf ({min_data_in_leaf}) * num_leaves ({num_leaves}) "
-            f"= {min_data_in_leaf * num_leaves} > n_train ({n_train})"
-        )
-
-    # Otros hiperparámetros
     params.update({
         "feature_fraction": float(trial.suggest_float("feature_fraction", 0.05, 1.0)),
-        "min_gain_to_split": float(trial.suggest_float("min_gain_to_split", 0.0, 1.0)),
-        "lambda_l2": float(trial.suggest_float("lambda_l2", 1e-4, 50.0, log=True)),
         "bagging_fraction": float(trial.suggest_float("bagging_fraction", 0.5, 1.0)),
         "bagging_freq": int(trial.suggest_int("bagging_freq", 1, 10)),
+        "min_gain_to_split": float(trial.suggest_float("min_gain_to_split", 0.0, 1.0)),
+        "lambda_l2": float(trial.suggest_float("lambda_l2", 1e-4, 50.0, log=True)),
     })
 
     return params, num_boost_round
