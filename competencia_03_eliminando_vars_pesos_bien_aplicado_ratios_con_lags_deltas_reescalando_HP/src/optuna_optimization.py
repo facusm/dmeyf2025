@@ -178,6 +178,8 @@ def suggest_params(trial, n_train: int, base: dict) -> tuple[dict, int]:
         "feature_fraction": float(trial.suggest_float("feature_fraction", 0.05, 1.0)),
         "min_gain_to_split": float(trial.suggest_float("min_gain_to_split", 0.0, 1.0)),
         "lambda_l2": float(trial.suggest_float("lambda_l2", 1e-4, 50.0, log=True)),
+        "bagging_fraction": float(trial.suggest_float("bagging_fraction", 0.5, 1.0)),
+        "bagging_freq": int(trial.suggest_int("bagging_freq", 1, 10)),
     })
 
     return params, num_boost_round
