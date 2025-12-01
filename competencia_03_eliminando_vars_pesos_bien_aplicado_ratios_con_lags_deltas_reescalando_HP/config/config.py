@@ -198,7 +198,7 @@ RESULTADOS_PREDICCION_DIR = os.path.join(EXPERIMENT_DIR, "resultados_prediccion"
 NOMBRE_DE_ESTUDIO_OPTUNA = f"{NOMBRE_EXPERIMENTO}_optuna"
 NOMBRE_BASE_DE_DATOS_OPTUNA = f"{NOMBRE_EXPERIMENTO}_optuna_study.db"
 
-N_TRIALS = 80
+N_TRIALS = 60
 N_STARTUP_TRIALS = 20
 
 # ==================================================================================
