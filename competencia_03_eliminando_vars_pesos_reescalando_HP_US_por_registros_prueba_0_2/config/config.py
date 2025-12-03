@@ -88,7 +88,7 @@ SEMILLAS_ENSEMBLE = SEMILLAS_ENSEMBLE[:SEMILLAS_TOTALES]
 APLICAR_UNDERSAMPLING = True
 RATIO_UNDERSAMPLING = 0.03 
 RATIO_UNDERSAMPLING_VAL_EXT = 0.2
-RATIO_UNDERSAMPLING_TEST_FINAL = 0.4
+RATIO_UNDERSAMPLING_TEST_FINAL = 0.2
 
 def _tag_us():
     if (not APLICAR_UNDERSAMPLING) or (RATIO_UNDERSAMPLING >= 0.999):
@@ -172,9 +172,9 @@ for path in [EXPERIMENT_DIR, DB_PATH, MODELOS_PATH, LOGS_PATH, RESULTADOS_PREDIC
 # ==================================================================================
 
 # Semillerio para APO (validación externa)
-SEMILLAS_APO = SEMILLAS_ENSEMBLE   # por ej: 20 seeds para APO
+SEMILLAS_APO = SEMILLAS_ENSEMBLE   # por ej: 10 seeds para APO
 APO_K_SEM = 10                          # 10 seeds por APO
-APO_N_APO = 1                          # 2 repes
+APO_N_APO = 1                          # 1 repes
 
 assert len(SEMILLAS_ENSEMBLE) >= APO_K_SEM * APO_N_APO, \
     f"ERROR: Se necesitan {APO_K_SEM * APO_N_APO} semillas para APO pero solo hay {len(SEMILLAS_ENSEMBLE)}."
