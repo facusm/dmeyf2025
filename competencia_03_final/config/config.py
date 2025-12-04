@@ -180,7 +180,7 @@ assert len(SEMILLAS_ENSEMBLE) >= APO_K_SEM * APO_N_APO, \
     f"ERROR: Se necesitan {APO_K_SEM * APO_N_APO} semillas para APO pero solo hay {len(SEMILLAS_ENSEMBLE)}."
 
 # Lista de N candidatos (cantidad de envíos) a evaluar
-APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500, 13000]  # adaptalo a tu caso
+APO_CORTES_ENVIO = [9500, 10000, 10500, 11000, 11500, 12000, 12500, 13000]  
 
 # Carpeta donde se guardan los modelos entrenados SOLO para validación externa
 MODEL_DIR_VAL_EXT = os.path.join(EXPERIMENT_DIR, "modelos_val_ext")
